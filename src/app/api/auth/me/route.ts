@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { AuthService } from '@/lib/auth/server'
 import { store } from '@/lib/data-store'
 
@@ -93,5 +93,50 @@ export async function GET() {
       { error: 'Lỗi hệ thống.' },
       { status: 500 }
     )
+  }
+}
+
+export async function PUT(request: NextRequest) {
+  try {
+    const user = await AuthService.getCurrentUserWithRole()
+    if (!user) {
+      return NextResponse.json({ error: 'Chưa đăng nhập.' }, { status: 401 })
+    }
+
+    const body = await request.json()
+    const { fullName } = body
+
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
+      return NextResponse.json({ error: 'Họ và tên không được để trống.' }, { status: 400 })
+    }
+
+    const trimmedName = fullName.trim()
+
+    // 1. Cập nhật trong DB Prisma
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { fullName: trimmedName },
+      })
+    } catch (err) {
+      console.warn('Lỗi cập nhật user trong DB:', err)
+    }
+
+    // 2. Cập nhật trong store in-memory fallback
+    const storeTeacher = store.teachers.find((t) => t.id === user.id || t.email === user.email)
+    if (storeTeacher) {
+      storeTeacher.fullName = trimmedName
+    }
+
+    return NextResponse.json({
+      message: 'Cập nhật thông tin thành công.',
+      user: {
+        ...user,
+        fullName: trimmedName,
+      },
+    })
+  } catch (error) {
+    console.error('Update profile error:', error)
+    return NextResponse.json({ error: 'Lỗi máy chủ khi cập nhật thông tin.' }, { status: 500 })
   }
 }

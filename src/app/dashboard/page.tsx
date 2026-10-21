@@ -26,8 +26,29 @@ export default function DashboardPage() {
 
   const [classes, setClasses] = useState<{ id: string; name: string; studentCount: number; code: string }[]>([])
   const [pendingSubmissions, setPendingSubmissions] = useState<any[]>([])
+  const [currentUser, setCurrentUser] = useState<{ fullName: string } | null>(null)
+  const [activeSchoolYear, setActiveSchoolYear] = useState('Năm học 2026 - 2027')
 
   useEffect(() => {
+    // Fetch current user
+    fetch('/api/auth/me')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.user) setCurrentUser(data.user)
+      })
+      .catch(() => {})
+
+    // Fetch active school year
+    fetch('/api/school-years')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.schoolYears) {
+          const active = data.schoolYears.find((y: { isActive: boolean }) => y.isActive)
+          if (active) setActiveSchoolYear(active.name)
+        }
+      })
+      .catch(() => {})
+
     // Fetch classes
     fetch('/api/classes')
       .then((res) => res.json())
@@ -58,10 +79,10 @@ export default function DashboardPage() {
               Nền tảng Giáo dục AI Tiểu học
             </div>
             <h1 className="text-2xl md:text-3xl font-bold text-text-primary mb-2">
-              Chào mừng, <span className="gradient-text">Thầy Nguyễn Văn An</span>
+              Chào mừng, <span className="gradient-text">{currentUser?.fullName || 'Quý Thầy/Cô'}</span>
             </h1>
             <p className="text-text-muted text-sm max-w-2xl leading-relaxed">
-              Quản lý năm học 2026-2027, phân phối bài tập Tin học khối 3-5 và kiểm duyệt kết quả chấm điểm do Gemini AI hỗ trợ.
+              Quản lý {activeSchoolYear}, phân phối bài tập Tin học khối 3-5 và kiểm duyệt kết quả chấm điểm do Gemini AI hỗ trợ.
             </p>
           </div>
 

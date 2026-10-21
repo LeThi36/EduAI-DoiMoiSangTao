@@ -26,12 +26,18 @@ export default function Header() {
       .catch(() => {})
 
     // 2. Lấy thông tin tài khoản đang đăng nhập
-    fetch('/api/auth/me')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.user) setUser(data.user)
-      })
-      .catch(() => {})
+    const loadUser = () => {
+      fetch('/api/auth/me')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.user) setUser(data.user)
+        })
+        .catch(() => {})
+    }
+
+    loadUser()
+    window.addEventListener('user-updated', loadUser)
+    return () => window.removeEventListener('user-updated', loadUser)
   }, [])
 
   const getInitials = (name?: string, role?: string) => {
