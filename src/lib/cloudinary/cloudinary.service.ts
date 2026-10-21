@@ -115,7 +115,7 @@ class CloudinaryService {
 
     // Chuẩn bị FormData để gọi trực tiếp Cloudinary REST API
     const formData = new FormData()
-    const blob = new Blob([fileBuffer], { type: mimeType })
+    const blob = new Blob([fileBuffer as any], { type: mimeType })
     formData.append('file', blob, fileName)
     formData.append('api_key', this.apiKey)
     formData.append('timestamp', timestamp.toString())

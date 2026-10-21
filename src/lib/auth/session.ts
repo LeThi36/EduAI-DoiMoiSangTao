@@ -22,7 +22,7 @@ export interface SessionUser {
   role: string
 }
 
-export interface SessionPayload extends SessionUser, JWTPayload {
+export type SessionPayload = SessionUser & JWTPayload & {
   iat: number // Thời điểm tạo phiên (seconds)
   exp: number // Thời điểm hết hạn trượt (seconds)
 }
