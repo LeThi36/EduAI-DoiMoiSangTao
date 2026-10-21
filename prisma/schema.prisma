@@ -1,0 +1,357 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// ROLES & USERS
+// ============================================================
+
+model Role {
+  id    String @id @default(cuid())
+  name  String @unique // "teacher" | "student"
+  users User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id              String   @id @default(cuid())
+  authId          String?  @unique // Supabase Auth UUID (null nếu tạo học sinh nội bộ)
+  email           String   @unique
+  username        String?  @unique // Tên đăng nhập của học sinh hoặc giáo viên
+  passwordHash    String?  // Mật khẩu băm an toàn (PBKDF2-SHA256)
+  initialPassword String?  // Mật khẩu ban đầu để giáo viên xem/in danh sách cấp cho học sinh
+  fullName        String
+  roleId          String
+  role            Role     @relation(fields: [roleId], references: [id])
+  isActive        Boolean  @default(true)
+
+  teacherProfile  TeacherProfile?
+  studentProfile  StudentProfile?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TeacherProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // AI Settings
+  feedbackLanguage String @default("vi")
+  feedbackStyle    String @default("encouraging") // encouraging | concise | detailed
+  feedbackDetail   String @default("standard")    // short | standard | detailed
+  customPrompt     String @default("")
+
+  classes          Class[]
+  assignments      Assignment[]
+  teacherReviews   TeacherReview[]
+  promptVersions   PromptVersion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model StudentProfile {
+  id        String @id @default(cuid())
+  userId    String @unique
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentId String @unique // Mã học sinh
+
+  enrollments ClassEnrollment[]
+  submissions Submission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// SCHOOL ORGANIZATION
+// ============================================================
+
+model SchoolYear {
+  id       String  @id @default(cuid())
+  name     String  // e.g. "2026-2027"
+  startYear Int
+  endYear   Int
+  isActive Boolean @default(true)
+  isArchived Boolean @default(false)
+
+  classes Class[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([startYear, endYear])
+}
+
+model Grade {
+  id    String @id @default(cuid())
+  level Int    @unique // 1, 2, 3, 4, 5
+  name  String // "Khối 1", "Khối 2", etc.
+
+  classes Class[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Class {
+  id           String     @id @default(cuid())
+  name         String     // e.g. "3/1", "4/2"
+  code         String     @unique
+  schoolYearId String
+  schoolYear   SchoolYear @relation(fields: [schoolYearId], references: [id])
+  gradeId      String
+  grade        Grade      @relation(fields: [gradeId], references: [id])
+  teacherId    String
+  teacher      TeacherProfile @relation(fields: [teacherId], references: [id])
+  isActive     Boolean    @default(true)
+  isArchived   Boolean    @default(false)
+
+  enrollments  ClassEnrollment[]
+  assignmentDistributions AssignmentDistribution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ClassEnrollment {
+  id             String         @id @default(cuid())
+  classId        String
+  class          Class          @relation(fields: [classId], references: [id])
+  studentId      String
+  studentProfile StudentProfile @relation(fields: [studentId], references: [id])
+  status         String         @default("active") // active | transferred
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([classId, studentId])
+}
+
+// ============================================================
+// ASSIGNMENTS
+// ============================================================
+
+model Assignment {
+  id            String  @id @default(cuid())
+  title         String
+  description   String  @default("")
+  type          String  // multiple_choice | essay | practice
+  gradeLevel    Int     // Target grade level
+  maxScore      Float   @default(10)
+  teacherId     String
+  teacher       TeacherProfile @relation(fields: [teacherId], references: [id])
+
+  // Timing
+  startDate     DateTime?
+  dueDate       DateTime?
+  maxAttempts   Int     @default(1)
+
+  // AI Config
+  rubric        Json?   // Rubric criteria as JSON
+  answerKey     Json?   // Answer key for MCQ
+  aiPrompt      String  @default("")
+
+  questions     Question[]
+  distributions AssignmentDistribution[]
+  submissions   Submission[]
+  promptVersions PromptVersion[]
+
+  isPublished   Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  assignmentId  String
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  orderIndex    Int
+  content       String
+  type          String   // single_choice | multiple_choice | true_false | fill_blank | essay
+  maxScore      Float    @default(1)
+  correctAnswer String?  // For objective questions
+  explanation   String?
+
+  options       QuestionOption[]
+  answers       SubmissionAnswer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String   // A, B, C, D
+  content    String
+  isCorrect  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model AssignmentDistribution {
+  id           String     @id @default(cuid())
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id])
+  classId      String
+  class        Class      @relation(fields: [classId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([assignmentId, classId])
+}
+
+// ============================================================
+// SUBMISSIONS
+// ============================================================
+
+model Submission {
+  id           String         @id @default(cuid())
+  assignmentId String
+  assignment   Assignment     @relation(fields: [assignmentId], references: [id])
+  studentId    String
+  student      StudentProfile @relation(fields: [studentId], references: [id])
+  attemptNumber Int           @default(1)
+  status       String         @default("draft") // draft | submitted | grading | graded | published
+
+  totalScore   Float?
+  submittedAt  DateTime?
+
+  answers      SubmissionAnswer[]
+  files        SubmissionFile[]
+  aiEvaluation AIEvaluation?
+  teacherReview TeacherReview?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assignmentId, studentId, attemptNumber])
+}
+
+model SubmissionAnswer {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  questionId   String
+  question     Question   @relation(fields: [questionId], references: [id])
+  answer       String     @default("")
+  score        Float?
+  isCorrect    Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SubmissionFile {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  fileName     String
+  fileUrl      String
+  fileType     String     // image/png, application/docx, etc.
+  fileSize     Int        // in bytes
+
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// AI EVALUATION
+// ============================================================
+
+model PromptVersion {
+  id           String         @id @default(cuid())
+  teacherId    String
+  teacher      TeacherProfile @relation(fields: [teacherId], references: [id])
+  assignmentId String?
+  assignment   Assignment?    @relation(fields: [assignmentId], references: [id])
+  content      String
+  version      Int            @default(1)
+
+  aiEvaluations AIEvaluation[]
+
+  createdAt DateTime @default(now())
+}
+
+model AIEvaluation {
+  id              String     @id @default(cuid())
+  submissionId    String     @unique
+  submission      Submission @relation(fields: [submissionId], references: [id])
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id])
+
+  provider        String     @default("gemini")
+  model           String     @default("")
+  status          String     @default("pending") // pending | processing | completed | failed | needs_review
+
+  suggestedScore  Float?
+  resultJson      Json?      // Full AI evaluation result
+  strengths       String?
+  weaknesses      String?
+  suggestions     String?
+  processingTime  Int?       // in ms
+  errorMessage    String?
+
+  criterionScores AICriterionScore[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AICriterionScore {
+  id             String       @id @default(cuid())
+  evaluationId   String
+  evaluation     AIEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  criterionName  String
+  maxScore       Float
+  suggestedScore Float
+  evidence       String?
+  feedback       String?
+
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// TEACHER REVIEW
+// ============================================================
+
+model TeacherReview {
+  id           String         @id @default(cuid())
+  submissionId String         @unique
+  submission   Submission     @relation(fields: [submissionId], references: [id])
+  teacherId    String
+  teacher      TeacherProfile @relation(fields: [teacherId], references: [id])
+  finalScore   Float
+  finalFeedback String        @default("")
+  isPublished  Boolean        @default(false)
+
+  revisions    FeedbackRevision[]
+
+  reviewedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model FeedbackRevision {
+  id        String        @id @default(cuid())
+  reviewId  String
+  review    TeacherReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  oldScore  Float?
+  newScore  Float?
+  oldFeedback String?
+  newFeedback String?
+  reason    String?
+
+  createdAt DateTime @default(now())
+}
