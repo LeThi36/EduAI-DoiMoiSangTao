@@ -59,6 +59,7 @@ export interface AssignmentItem {
     criteria: { name: string; maxScore: number; description: string }[]
   }
   aiPrompt: string
+  teacherId?: string
   maxAttempts?: number // Số lần làm tối đa (0 hoặc undefined = không giới hạn)
   durationMinutes?: number // Thời gian làm bài tính bằng phút (0 hoặc undefined = không giới hạn)
   attachments?: {
@@ -117,6 +118,7 @@ export interface SubmissionItem {
   assignmentId: string
   assignmentTitle: string
   studentId: string
+  studentProfileId?: string
   studentName: string
   studentCode: string
   classId?: string

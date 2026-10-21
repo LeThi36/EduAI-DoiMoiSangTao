@@ -39,6 +39,8 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     const maxAttempts = body.maxAttempts !== undefined ? Math.max(0, Number(body.maxAttempts) || 0) : 1
     const durationMinutes = body.durationMinutes !== undefined ? Math.max(0, Number(body.durationMinutes) || 0) : 20
     const rawTargetClasses = Array.isArray(body.targetClassIds) ? body.targetClassIds : []
+    const index = store.assignments.findIndex((assignment) => assignment.id === id)
+    const previous = index >= 0 ? store.assignments[index] : null
 
     // 1. Cập nhật trong Prisma DB Supabase
     let updatedDbAssignment: any = null
@@ -81,9 +83,6 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     // 2. Cập nhật trong store in-memory (fallback & sync)
-    const index = store.assignments.findIndex((assignment) => assignment.id === id)
-    const previous = index >= 0 ? store.assignments[index] : null
-
     const questions = Array.isArray(body.questions)
       ? body.questions.map((question: any, questionIndex: number) => ({
           id: question.id || previous?.questions?.[questionIndex]?.id || `q-${Date.now()}-${questionIndex + 1}`,

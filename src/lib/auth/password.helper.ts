@@ -10,6 +10,13 @@ const HASH_PREFIX = 'pbkdf2$sha256'
 
 const textEncoder = new TextEncoder()
 
+/** Web Crypto requires data backed by an ArrayBuffer, not SharedArrayBuffer. */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
+
 /**
  * Chuyển đổi Uint8Array sang chuỗi Hex
  */
@@ -44,7 +51,7 @@ export async function hashPassword(plainPassword: string): Promise<string> {
   // 2. Import mật khẩu thô vào Web Crypto Key
   const passwordKey = await crypto.subtle.importKey(
     'raw',
-    textEncoder.encode(plainPassword),
+    toArrayBuffer(textEncoder.encode(plainPassword)),
     { name: 'PBKDF2' },
     false,
     ['deriveBits']
@@ -54,7 +61,7 @@ export async function hashPassword(plainPassword: string): Promise<string> {
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt: salt as any,
+      salt: toArrayBuffer(salt),
       iterations: ITERATIONS,
       hash: 'SHA-256',
     },
@@ -88,7 +95,7 @@ export async function verifyPassword(plainPassword: string, storedPasswordOrHash
 
     const passwordKey = await crypto.subtle.importKey(
       'raw',
-      textEncoder.encode(plainPassword),
+      toArrayBuffer(textEncoder.encode(plainPassword)),
       { name: 'PBKDF2' },
       false,
       ['deriveBits']
@@ -97,7 +104,7 @@ export async function verifyPassword(plainPassword: string, storedPasswordOrHash
     const derivedBits = await crypto.subtle.deriveBits(
       {
         name: 'PBKDF2',
-        salt: salt as any,
+        salt: toArrayBuffer(salt),
         iterations,
         hash: 'SHA-256',
       },

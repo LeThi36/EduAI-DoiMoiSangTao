@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { store } from '@/lib/data-store'
-import type { SubmissionItem } from '@/lib/data-store'
+import type { AssignmentItem, SubmissionItem } from '@/lib/data-store'
 import { EvaluationService } from '@/lib/ai/services/evaluation.service'
 
 /**
@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
           },
         })
         if (dbA) {
-          assignment = {
+          const mappedAssignment: AssignmentItem = {
             id: dbA.id,
             title: dbA.title,
             description: dbA.description,
@@ -203,7 +203,8 @@ export async function POST(request: NextRequest) {
               })),
             })),
           }
-          store.assignments.push(assignment)
+          assignment = mappedAssignment
+          store.assignments.push(mappedAssignment)
         }
       } catch (err) {
         console.warn('Lỗi tìm assignment trong Prisma DB:', err)
@@ -389,7 +390,7 @@ export async function POST(request: NextRequest) {
                 suggestions: aiEval?.suggestions || '',
                 resultJson: {
                   ...(aiEval as any),
-                  submissionContent: sub.content || evalJson?.submissionContent || '',
+                  submissionContent: sub.content || '',
                 },
               },
               update: {
@@ -401,7 +402,7 @@ export async function POST(request: NextRequest) {
                 suggestions: aiEval?.suggestions || '',
                 resultJson: {
                   ...(aiEval as any),
-                  submissionContent: sub.content || evalJson?.submissionContent || '',
+                  submissionContent: sub.content || '',
                 },
                 errorMessage: null,
               },
@@ -410,7 +411,7 @@ export async function POST(request: NextRequest) {
             await prisma.aICriterionScore.deleteMany({ where: { evaluationId: dbEval.id } }).catch(() => {})
             if (criteriaScores.length > 0) {
               await prisma.aICriterionScore.createMany({
-                data: criteriaScores.map((c) => ({
+                data: criteriaScores.map((c: { criterion: string; score: number; maxScore: number; evidence: string }) => ({
                   evaluationId: dbEval.id,
                   criterionName: c.criterion,
                   maxScore: Number(c.maxScore || 10),

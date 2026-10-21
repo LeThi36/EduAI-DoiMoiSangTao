@@ -51,7 +51,7 @@ export const AuthService = {
           }
         }
 
-        const storedPassword = dbUser.passwordHash || dbUser.initialPassword
+        const storedPassword = dbUser.passwordHash || dbUser.initialPassword || undefined
         const isValid = await verifyPassword(password, storedPassword)
 
         if (!isValid) {

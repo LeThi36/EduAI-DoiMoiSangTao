@@ -28,6 +28,16 @@ export const CLOUDINARY_FOLDERS: Record<UploadCategory, string> = {
   'avatars': 'eduai/avatars',
 }
 
+/** Create an owned ArrayBuffer accepted by the DOM Blob type. */
+function toArrayBuffer(fileBuffer: Buffer | ArrayBuffer): ArrayBuffer {
+  const source = fileBuffer instanceof ArrayBuffer
+    ? new Uint8Array(fileBuffer)
+    : new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength)
+  const copy = new Uint8Array(source.byteLength)
+  copy.set(source)
+  return copy.buffer
+}
+
 class CloudinaryService {
   private get cloudName(): string {
     const val = process.env.CLOUDINARY_CLOUD_NAME?.trim()
@@ -115,7 +125,7 @@ class CloudinaryService {
 
     // Chuẩn bị FormData để gọi trực tiếp Cloudinary REST API
     const formData = new FormData()
-    const blob = new Blob([fileBuffer as any], { type: mimeType })
+    const blob = new Blob([toArrayBuffer(fileBuffer)], { type: mimeType })
     formData.append('file', blob, fileName)
     formData.append('api_key', this.apiKey)
     formData.append('timestamp', timestamp.toString())

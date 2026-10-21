@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { store } from '@/lib/data-store'
 import { QuizFeedbackService } from '@/lib/ai/services/quiz-feedback.service'
 import type { QuizItemResult, QuizResult, SubmissionItem } from '@/lib/data-store'
@@ -388,11 +389,11 @@ export async function POST(request: NextRequest) {
                       : quizResult.teacherInsight.weakConcepts.join('; ') ||
                         wrongItems.map((g) => `Câu ${g.index}`).join(', '),
                   suggestions: quizResult.studentFeedback,
-                  resultJson: {
+                  resultJson: JSON.parse(JSON.stringify({
                     quizResult,
                     submissionContent: gradedItems.map((g) => `Câu ${g.index}: ${g.selectedLabel}`).join('\n'),
                     isAutoSubmitted: Boolean(isAutoSubmitted),
-                  },
+                  })) as Prisma.InputJsonValue,
                   criterionScores: {
                     create: quizResult.items.map((g) => ({
                       criterionName: `Câu ${g.index}`,

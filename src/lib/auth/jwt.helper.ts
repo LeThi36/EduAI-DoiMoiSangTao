@@ -15,6 +15,12 @@ function getJwtSecret(): string {
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
+
 export interface JWTPayload {
   sub?: string // User ID
   id?: string
@@ -65,7 +71,7 @@ export function base64UrlDecode(str: string): Uint8Array {
 async function getSigningKey(): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'raw',
-    textEncoder.encode(getJwtSecret()),
+    toArrayBuffer(textEncoder.encode(getJwtSecret())),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign', 'verify']
@@ -94,7 +100,7 @@ export async function signJWT(payload: JWTPayload, options?: JWTOptions): Promis
   // 3. Signature: HMAC-SHA256(header.payload)
   const dataToSign = `${encodedHeader}.${encodedPayload}`
   const key = await getSigningKey()
-  const signatureBuffer = await crypto.subtle.sign('HMAC', key, textEncoder.encode(dataToSign))
+  const signatureBuffer = await crypto.subtle.sign('HMAC', key, toArrayBuffer(textEncoder.encode(dataToSign)))
   const encodedSignature = base64UrlEncode(new Uint8Array(signatureBuffer))
 
   return `${dataToSign}.${encodedSignature}`
@@ -121,8 +127,8 @@ export async function verifyJWT<T extends JWTPayload = JWTPayload>(token: string
     const isValid = await crypto.subtle.verify(
       'HMAC',
       key,
-      signatureBytes,
-      textEncoder.encode(dataToVerify)
+      toArrayBuffer(signatureBytes),
+      toArrayBuffer(textEncoder.encode(dataToVerify))
     )
 
     if (!isValid) return null
