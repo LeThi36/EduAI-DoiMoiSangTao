@@ -14,7 +14,7 @@ const textEncoder = new TextEncoder()
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength)
   copy.set(bytes)
-  return copy.buffer
+  return copy.buffer as unknown as ArrayBuffer
 }
 
 /**
@@ -61,7 +61,7 @@ export async function hashPassword(plainPassword: string): Promise<string> {
   const derivedBits = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt: toArrayBuffer(salt),
+      salt: toArrayBuffer(salt) as any,
       iterations: ITERATIONS,
       hash: 'SHA-256',
     },
@@ -104,7 +104,7 @@ export async function verifyPassword(plainPassword: string, storedPasswordOrHash
     const derivedBits = await crypto.subtle.deriveBits(
       {
         name: 'PBKDF2',
-        salt: toArrayBuffer(salt),
+        salt: toArrayBuffer(salt) as any,
         iterations,
         hash: 'SHA-256',
       },

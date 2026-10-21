@@ -35,7 +35,7 @@ function toArrayBuffer(fileBuffer: Buffer | ArrayBuffer): ArrayBuffer {
     : new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength)
   const copy = new Uint8Array(source.byteLength)
   copy.set(source)
-  return copy.buffer
+  return copy.buffer as unknown as ArrayBuffer
 }
 
 class CloudinaryService {
@@ -125,7 +125,7 @@ class CloudinaryService {
 
     // Chuẩn bị FormData để gọi trực tiếp Cloudinary REST API
     const formData = new FormData()
-    const blob = new Blob([toArrayBuffer(fileBuffer)], { type: mimeType })
+    const blob = new Blob([toArrayBuffer(fileBuffer) as any], { type: mimeType })
     formData.append('file', blob, fileName)
     formData.append('api_key', this.apiKey)
     formData.append('timestamp', timestamp.toString())
