@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -29,52 +28,41 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    if (dbAssignments.length > 0) {
-      const assignments = dbAssignments.map((a) => ({
-        id: a.id,
-        title: a.title,
-        description: a.description,
-        type: a.type,
-        gradeLevel: a.gradeLevel,
-        maxScore: a.maxScore,
-        targetClassIds: a.distributions.map((d) => d.classId),
-        startDate: a.startDate?.toISOString() || a.createdAt.toISOString(),
-        dueDate: a.dueDate?.toISOString() || new Date(Date.now() + 14 * 86400000).toISOString(),
-        isPublished: a.isPublished,
-        rubric: (a.rubric as any) || { criteria: [] },
-        aiPrompt: a.aiPrompt,
-        maxAttempts: a.maxAttempts,
-        durationMinutes: (a.rubric as any)?.durationMinutes ?? 20,
-        attachments: (a.rubric as any)?.attachments || store.assignments.find((s) => s.id === a.id)?.attachments || [],
-        questions: a.questions.map((q) => ({
-          id: q.id,
-          content: q.content,
-          type: q.type,
-          maxScore: q.maxScore,
-          correctAnswer: q.correctAnswer || undefined,
-          options: q.options.map((opt) => ({
-            label: opt.label,
-            text: opt.content,
-            isCorrect: opt.isCorrect,
-          })),
+    const assignments = dbAssignments.map((a) => ({
+      id: a.id,
+      title: a.title,
+      description: a.description,
+      type: a.type,
+      gradeLevel: a.gradeLevel,
+      maxScore: a.maxScore,
+      targetClassIds: a.distributions.map((d) => d.classId),
+      startDate: a.startDate?.toISOString() || a.createdAt.toISOString(),
+      dueDate: a.dueDate?.toISOString() || new Date(Date.now() + 14 * 86400000).toISOString(),
+      isPublished: a.isPublished,
+      rubric: (a.rubric as any) || { criteria: [] },
+      aiPrompt: a.aiPrompt,
+      maxAttempts: a.maxAttempts,
+      durationMinutes: (a.rubric as any)?.durationMinutes ?? 20,
+      attachments: (a.rubric as any)?.attachments || [],
+      questions: a.questions.map((q) => ({
+        id: q.id,
+        content: q.content,
+        type: q.type,
+        maxScore: q.maxScore,
+        correctAnswer: q.correctAnswer || undefined,
+        options: q.options.map((opt) => ({
+          label: opt.label,
+          text: opt.content,
+          isCorrect: opt.isCorrect,
         })),
-      }))
+      })),
+    }))
 
-      return NextResponse.json({ assignments })
-    }
+    return NextResponse.json({ assignments })
   } catch (err) {
-    console.warn('Lỗi đọc assignments từ Prisma DB, dùng fallback:', err)
+    console.error('Lỗi đọc assignments từ Prisma DB:', err)
+    return NextResponse.json({ error: 'Không thể đọc bài tập từ cơ sở dữ liệu' }, { status: 500 })
   }
-
-  let assignments = store.assignments
-  if (gradeLevel) {
-    assignments = assignments.filter((a) => a.gradeLevel === Number(gradeLevel))
-  }
-  if (classId) {
-    assignments = assignments.filter((a) => a.targetClassIds.includes(classId))
-  }
-
-  return NextResponse.json({ assignments })
 }
 
 export async function POST(request: NextRequest) {
@@ -221,7 +209,6 @@ export async function POST(request: NextRequest) {
       attachments: Array.isArray(attachments) ? attachments : [],
     }
 
-    store.assignments.unshift(newAssignment)
     return NextResponse.json({ message: 'Tạo bài tập thành công', assignment: newAssignment }, { status: 201 })
   } catch (error) {
     console.error('Create assignment error:', error)

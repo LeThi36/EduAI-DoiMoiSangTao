@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 import type { AssignmentItem, SubmissionItem } from '@/lib/data-store'
 import { EvaluationService } from '@/lib/ai/services/evaluation.service'
 

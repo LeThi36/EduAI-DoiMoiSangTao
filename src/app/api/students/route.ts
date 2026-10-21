@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 import { hashPassword } from '@/lib/auth/password.helper'
 
 export async function GET(request: NextRequest) {
@@ -42,51 +41,34 @@ export async function GET(request: NextRequest) {
       orderBy: { studentId: 'asc' },
     })
 
-    if (dbStudents.length > 0) {
-      const students = dbStudents
-        .map((sp) => {
-          const activeEnrollment = sp.enrollments[0]
-          const cls = activeEnrollment?.class
-          const gLevel = cls?.grade?.level || (cls?.name ? Number(cls.name.split('/')[0]) : 3)
+    const students = dbStudents
+      .map((sp) => {
+        const activeEnrollment = sp.enrollments[0]
+        const cls = activeEnrollment?.class
+        const gLevel = cls?.grade?.level || (cls?.name ? Number(cls.name.split('/')[0]) : 3)
 
-          return {
-            id: sp.userId,
-            studentProfileId: sp.id,
-            studentId: sp.studentId,
-            username: sp.user.username || sp.studentId,
-            fullName: sp.user.fullName,
-            classId: cls?.id || '',
-            className: cls?.name || '',
-            gradeLevel: gLevel,
-            schoolYearId: cls?.schoolYearId || '',
-            email: sp.user.email,
-            initialPassword: sp.user.initialPassword || '******',
-            status: activeEnrollment?.status || 'active',
-          }
-        })
-        .filter((s) => (gradeLevel ? s.gradeLevel === Number(gradeLevel) : true))
+        return {
+          id: sp.userId,
+          studentProfileId: sp.id,
+          studentId: sp.studentId,
+          username: sp.user.username || sp.studentId,
+          fullName: sp.user.fullName,
+          classId: cls?.id || '',
+          className: cls?.name || '',
+          gradeLevel: gLevel,
+          schoolYearId: cls?.schoolYearId || '',
+          email: sp.user.email,
+          initialPassword: sp.user.initialPassword || '******',
+          status: activeEnrollment?.status || 'active',
+        }
+      })
+      .filter((s) => (gradeLevel ? s.gradeLevel === Number(gradeLevel) : true))
 
-      return NextResponse.json({ students })
-    }
+    return NextResponse.json({ students })
   } catch (err) {
-    console.warn('Lỗi đọc danh sách học sinh từ Prisma DB, dùng fallback:', err)
+    console.error('Lỗi đọc danh sách học sinh từ Prisma DB:', err)
+    return NextResponse.json({ error: 'Không thể đọc danh sách học sinh từ cơ sở dữ liệu' }, { status: 500 })
   }
-
-  let students = store.students
-  if (classId) {
-    students = students.filter((s) => s.classId === classId)
-  }
-  if (gradeLevel) {
-    students = students.filter((s) => s.gradeLevel === Number(gradeLevel))
-  }
-  if (query) {
-    const q = query.toLowerCase()
-    students = students.filter(
-      (s) => s.fullName.toLowerCase().includes(q) || s.studentId.toLowerCase().includes(q)
-    )
-  }
-
-  return NextResponse.json({ students })
 }
 
 export async function POST(request: NextRequest) {
@@ -100,26 +82,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Họ tên, tên đăng nhập, mật khẩu và lớp là bắt buộc' }, { status: 400 })
     }
 
-    // 1. Tìm lớp học trong DB (hoặc fallback store)
-    let targetClass = await prisma.class.findFirst({
+    // 1. Tìm lớp học trong DB
+    const targetClass = await prisma.class.findFirst({
       where: {
         OR: [{ id: classId }, { code: classId }, { name: classId }],
       },
       include: { grade: true },
     })
 
-    const targetClassFromStore = store.classes.find(
-      (c) => c.id === classId || c.name === classId || c.code === classId
-    )
-
-    if (!targetClass && !targetClassFromStore) {
+    if (!targetClass) {
       return NextResponse.json({ error: 'Lớp học không tồn tại. Vui lòng chọn hoặc tạo lớp học trước.' }, { status: 404 })
     }
 
-    const resolvedClassId = targetClass?.id || targetClassFromStore?.id || classId
-    const resolvedClassName = targetClass?.name || targetClassFromStore?.name || ''
-    const resolvedSchoolYearId = targetClass?.schoolYearId || targetClassFromStore?.schoolYearId || ''
-    const resolvedGradeLevel = targetClass?.grade?.level || 3
+    const resolvedClassId = targetClass.id
+    const resolvedClassName = targetClass.name
+    const resolvedSchoolYearId = targetClass.schoolYearId
+    const resolvedGradeLevel = targetClass.grade?.level || 3
 
     // 2. Kiểm tra tên đăng nhập đã tồn tại trong DB chưa
     const existingUser = await prisma.user.findFirst({
@@ -195,8 +173,6 @@ export async function POST(request: NextRequest) {
       initialPassword: String(rawPassword),
       status: 'active' as const,
     }
-
-    store.students.push(newStudent)
 
     return NextResponse.json(
       {

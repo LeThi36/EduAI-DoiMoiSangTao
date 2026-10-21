@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 
 export async function GET() {
   try {
@@ -8,14 +7,11 @@ export async function GET() {
       orderBy: { startYear: 'desc' },
     })
 
-    if (dbSchoolYears.length > 0) {
-      return NextResponse.json({ schoolYears: dbSchoolYears })
-    }
+    return NextResponse.json({ schoolYears: dbSchoolYears })
   } catch (err) {
-    console.warn('Lỗi đọc năm học từ DB, dùng fallback:', err)
+    console.error('Lỗi đọc năm học từ DB:', err)
+    return NextResponse.json({ error: 'Không thể đọc dữ liệu năm học từ cơ sở dữ liệu' }, { status: 500 })
   }
-
-  return NextResponse.json({ schoolYears: store.schoolYears })
 }
 
 export async function POST(request: NextRequest) {

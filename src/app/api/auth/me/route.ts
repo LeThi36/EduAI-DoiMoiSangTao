@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AuthService } from '@/lib/auth/server'
-import { store } from '@/lib/data-store'
-
 import { prisma } from '@/lib/prisma'
 
 export async function GET() {
@@ -49,28 +47,6 @@ export async function GET() {
       } catch (err) {
         console.warn('Lỗi đọc studentInfo từ Prisma DB trong auth/me:', err)
       }
-
-      if (!studentInfo) {
-        const emailLower = (user.email || '').toLowerCase()
-        const found = store.students.find(
-          (s) =>
-            s.id === user.id ||
-            (s.email && s.email.toLowerCase() === emailLower) ||
-            (s.username && s.username.toLowerCase() === emailLower.split('@')[0]) ||
-            (s.studentId && s.studentId.toLowerCase() === emailLower.split('@')[0])
-        )
-
-        if (found) {
-          studentInfo = {
-            id: found.id,
-            studentId: found.studentId,
-            fullName: found.fullName,
-            classId: found.classId,
-            className: found.className,
-            gradeLevel: found.gradeLevel,
-          }
-        }
-      }
     }
 
     return NextResponse.json({
@@ -112,27 +88,17 @@ export async function PUT(request: NextRequest) {
 
     const trimmedName = fullName.trim()
 
-    // 1. Cập nhật trong DB Prisma
-    try {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { fullName: trimmedName },
-      })
-    } catch (err) {
-      console.warn('Lỗi cập nhật user trong DB:', err)
-    }
-
-    // 2. Cập nhật trong store in-memory fallback
-    const storeTeacher = store.teachers.find((t) => t.id === user.id || t.email === user.email)
-    if (storeTeacher) {
-      storeTeacher.fullName = trimmedName
-    }
+    // Cập nhật trực tiếp vào cơ sở dữ liệu Prisma PostgreSQL
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { fullName: trimmedName },
+    })
 
     return NextResponse.json({
       message: 'Cập nhật thông tin thành công.',
       user: {
         ...user,
-        fullName: trimmedName,
+        fullName: updated.fullName,
       },
     })
   } catch (error) {

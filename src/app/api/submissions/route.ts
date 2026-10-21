@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
-import { store } from '@/lib/data-store'
 import { QuizFeedbackService } from '@/lib/ai/services/quiz-feedback.service'
 import type { QuizItemResult, QuizResult, SubmissionItem } from '@/lib/data-store'
 
@@ -57,86 +56,70 @@ export async function GET(request: NextRequest) {
       orderBy: { submittedAt: 'desc' },
     })
 
-    if (dbSubs.length > 0) {
-      const dbFormatted: SubmissionItem[] = dbSubs.map((s) => {
-        const file = s.files[0]
-        const evalJson = s.aiEvaluation?.resultJson as any
-        const quizRes = evalJson?.quizResult
+    const dbFormatted: SubmissionItem[] = dbSubs.map((s) => {
+      const file = s.files[0]
+      const evalJson = s.aiEvaluation?.resultJson as any
+      const quizRes = evalJson?.quizResult
 
-        return {
-          id: s.id,
-          assignmentId: s.assignmentId,
-          assignmentTitle: s.assignment?.title || '',
-          studentId: s.student?.userId || s.studentId,
-          studentProfileId: s.studentId,
-          studentName: s.student?.user?.fullName || 'Học sinh',
-          studentCode: s.student?.studentId || '',
-          classId: s.student?.enrollments?.[0]?.class?.id || '',
-          className: s.student?.enrollments?.[0]?.class?.name || '',
-          status: s.status as any,
-          submittedAt: s.submittedAt ? s.submittedAt.toISOString() : s.createdAt.toISOString(),
-          attemptNumber: s.attemptNumber,
-          isAutoSubmitted: Boolean(evalJson?.isAutoSubmitted),
-          content:
-            evalJson?.submissionContent ||
-            (evalJson as any)?.content ||
-            s.answers.map((a) => a.answer).filter(Boolean).join('\n') ||
-            store.submissions.find((m) => m.id === s.id)?.content ||
-            '',
-          fileName: file?.fileName || '',
-          fileUrl: file?.fileUrl || '',
-          answers: s.answers.map((a) => ({
-            questionId: a.questionId,
-            text: a.answer,
-            score: a.score ?? undefined,
-            isCorrect: a.isCorrect ?? undefined,
-          })),
-          quizResult: quizRes,
-          aiEvaluation: s.aiEvaluation
-            ? {
-                score: s.aiEvaluation.suggestedScore ?? 0,
-                strengths: s.aiEvaluation.strengths ?? '',
-                weaknesses: s.aiEvaluation.weaknesses ?? '',
-                suggestions: s.aiEvaluation.suggestions ?? '',
-                criteriaScores:
-                  s.aiEvaluation.criterionScores?.map((c) => ({
-                    criterion: c.criterionName,
-                    score: c.suggestedScore,
-                    maxScore: c.maxScore,
-                    evidence: c.evidence ?? '',
-                  })) || [],
-              }
-            : undefined,
-          teacherReview: s.teacherReview
-            ? {
-                finalScore: s.teacherReview.finalScore,
-                feedback: s.teacherReview.finalFeedback,
-                reviewedAt: s.teacherReview.reviewedAt ? s.teacherReview.reviewedAt.toISOString() : '',
-                isPublished: s.teacherReview.isPublished,
-              }
-            : undefined,
-        }
-      })
+      return {
+        id: s.id,
+        assignmentId: s.assignmentId,
+        assignmentTitle: s.assignment?.title || '',
+        studentId: s.student?.userId || s.studentId,
+        studentProfileId: s.studentId,
+        studentName: s.student?.user?.fullName || 'Học sinh',
+        studentCode: s.student?.studentId || '',
+        classId: s.student?.enrollments?.[0]?.class?.id || '',
+        className: s.student?.enrollments?.[0]?.class?.name || '',
+        status: s.status as any,
+        submittedAt: s.submittedAt ? s.submittedAt.toISOString() : s.createdAt.toISOString(),
+        attemptNumber: s.attemptNumber,
+        isAutoSubmitted: Boolean(evalJson?.isAutoSubmitted),
+        content:
+          evalJson?.submissionContent ||
+          (evalJson as any)?.content ||
+          s.answers.map((a) => a.answer).filter(Boolean).join('\n') ||
+          '',
+        fileName: file?.fileName || '',
+        fileUrl: file?.fileUrl || '',
+        answers: s.answers.map((a) => ({
+          questionId: a.questionId,
+          text: a.answer,
+          score: a.score ?? undefined,
+          isCorrect: a.isCorrect ?? undefined,
+        })),
+        quizResult: quizRes,
+        aiEvaluation: s.aiEvaluation
+          ? {
+              score: s.aiEvaluation.suggestedScore ?? 0,
+              strengths: s.aiEvaluation.strengths ?? '',
+              weaknesses: s.aiEvaluation.weaknesses ?? '',
+              suggestions: s.aiEvaluation.suggestions ?? '',
+              criteriaScores:
+                s.aiEvaluation.criterionScores?.map((c) => ({
+                  criterion: c.criterionName,
+                  score: c.suggestedScore,
+                  maxScore: c.maxScore,
+                  evidence: c.evidence ?? '',
+                })) || [],
+            }
+          : undefined,
+        teacherReview: s.teacherReview
+          ? {
+              finalScore: s.teacherReview.finalScore,
+              feedback: s.teacherReview.finalFeedback,
+              reviewedAt: s.teacherReview.reviewedAt ? s.teacherReview.reviewedAt.toISOString() : '',
+              isPublished: s.teacherReview.isPublished,
+            }
+          : undefined,
+      }
+    })
 
-      return NextResponse.json({ submissions: dbFormatted })
-    }
+    return NextResponse.json({ submissions: dbFormatted })
   } catch (err) {
-    console.warn('Lỗi đọc submissions từ Prisma DB, dùng fallback memory:', err)
+    console.error('Lỗi đọc submissions từ Prisma DB:', err)
+    return NextResponse.json({ error: 'Không thể đọc bài nộp từ cơ sở dữ liệu' }, { status: 500 })
   }
-
-  // 2. Fallback memory store nếu DB chưa có bản ghi
-  let submissions = store.submissions
-  if (assignmentId) {
-    submissions = submissions.filter((s) => s.assignmentId === assignmentId)
-  }
-  if (studentId) {
-    submissions = submissions.filter((s) => s.studentId === studentId)
-  }
-  if (status) {
-    submissions = submissions.filter((s) => s.status === status)
-  }
-
-  return NextResponse.json({ submissions })
 }
 
 type IncomingAnswer = { questionId: string; selectedLabel?: string; text?: string }

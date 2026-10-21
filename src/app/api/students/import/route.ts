@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { store } from '@/lib/data-store'
+import { prisma } from '@/lib/prisma'
 import { hashPassword } from '@/lib/auth/password.helper'
 
 interface RawImportRow {
@@ -16,9 +16,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Dữ liệu nhập hàng loạt không hợp lệ hoặc rỗng' }, { status: 400 })
     }
 
-    const targetClass = classId ? store.classes.find((c) => c.id === classId) : null
+    // 1. Tìm lớp trong DB
+    const targetClass = classId
+      ? await prisma.class.findFirst({
+          where: {
+            OR: [{ id: classId }, { code: classId }, { name: classId }],
+          },
+          include: { grade: true },
+        })
+      : null
+
     if (!targetClass) {
       return NextResponse.json({ error: 'Vui lòng chọn một lớp hợp lệ để nhập danh sách' }, { status: 400 })
+    }
+
+    // 2. Tìm hoặc tạo role student
+    let role = await prisma.role.findUnique({ where: { name: 'student' } })
+    if (!role) {
+      role = await prisma.role.create({ data: { name: 'student' } })
     }
 
     const results = {
@@ -33,40 +48,81 @@ export async function POST(request: NextRequest) {
         continue
       }
 
-      const loginName = row.username.trim().toLowerCase()
-      const existing = store.students.find(
-        (s) => (s.username || s.studentId).trim().toLowerCase() === loginName
-      )
+      const loginName = String(row.username).trim().toLowerCase()
+
+      // Kiểm tra trùng trong DB
+      const existing = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { username: loginName },
+            { email: `${loginName}@school.edu.vn` },
+            { studentProfile: { studentId: loginName } },
+          ],
+        },
+      })
+
       if (existing) {
         results.duplicates.push(loginName)
         continue
       }
 
       const email = `${loginName}@school.edu.vn`
-      const passwordHash = await hashPassword(row.password.trim())
+      const passwordHash = await hashPassword(String(row.password).trim())
+
+      // Tạo User + StudentProfile + ClassEnrollment trong DB
+      const createdUser = await prisma.user.create({
+        data: {
+          email,
+          username: loginName,
+          fullName: row.fullName.trim(),
+          passwordHash,
+          initialPassword: String(row.password).trim(),
+          roleId: role.id,
+          studentProfile: {
+            create: {
+              studentId: loginName,
+            },
+          },
+        },
+        include: { studentProfile: true },
+      })
+
+      if (createdUser.studentProfile) {
+        await prisma.classEnrollment.upsert({
+          where: {
+            classId_studentId: {
+              classId: targetClass.id,
+              studentId: createdUser.studentProfile.id,
+            },
+          },
+          update: {},
+          create: {
+            classId: targetClass.id,
+            studentId: createdUser.studentProfile.id,
+            status: 'active',
+          },
+        })
+      }
 
       const newStudent = {
-        id: `st-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: createdUser.id,
         studentId: loginName,
         username: loginName,
         fullName: row.fullName.trim(),
         classId: targetClass.id,
         className: targetClass.name,
-        gradeLevel: Number(targetClass.name.split('/')[0]) || 3,
+        gradeLevel: targetClass.grade?.level || Number(targetClass.name.split('/')[0]) || 3,
         schoolYearId: targetClass.schoolYearId,
         email,
-        passwordHash,
-        initialPassword: row.password.trim(),
+        initialPassword: String(row.password).trim(),
         status: 'active' as const,
       }
 
-      store.students.push(newStudent)
-      targetClass.studentCount += 1
       results.imported.push(newStudent)
     }
 
     return NextResponse.json({
-      message: `Nhập thành công ${results.imported.length} học sinh. Phát hiện ${results.duplicates.length} tên đăng nhập trùng.`,
+      message: `Nhập thành công ${results.imported.length} học sinh vào cơ sở dữ liệu. Phát hiện ${results.duplicates.length} tên đăng nhập trùng.`,
       results,
     })
   } catch (error) {

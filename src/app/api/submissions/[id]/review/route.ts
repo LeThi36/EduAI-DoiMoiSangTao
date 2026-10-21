@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 
 export async function POST(
   request: NextRequest,
@@ -10,114 +9,61 @@ export async function POST(
     const { id } = await params
     const { finalScore, feedback, isPublished } = await request.json()
 
-    // 1. Tìm hoặc tạo submission trong Prisma DB Supabase
-    let dbSubmission = await prisma.submission.findUnique({
+    // 1. Tìm bài nộp trực tiếp trong Prisma DB Supabase
+    const dbSubmission = await prisma.submission.findUnique({
       where: { id },
       include: { assignment: true, student: true },
-    }).catch(() => null)
+    })
 
-    const memSub = store.submissions.find((s) => s.id === id)
-
-    // Nếu bài nộp chưa có trong DB (tồn tại từ memory cache), đồng bộ vào DB
-    if (!dbSubmission && memSub) {
-      try {
-        const dbStudent = await prisma.studentProfile.findFirst({
-          where: {
-            OR: [
-              { userId: memSub.studentId },
-              { id: memSub.studentId },
-              { studentId: memSub.studentCode },
-            ],
-          },
-        })
-        const dbAssignment = await prisma.assignment.findFirst({
-          where: {
-            OR: [{ id: memSub.assignmentId }, { title: memSub.assignmentTitle }],
-          },
-        })
-
-        if (dbStudent && dbAssignment) {
-          dbSubmission = await prisma.submission.create({
-            data: {
-              id: memSub.id.startsWith('sub-') ? memSub.id : undefined,
-              assignmentId: dbAssignment.id,
-              studentId: dbStudent.id,
-              attemptNumber: memSub.attemptNumber || 1,
-              status: isPublished ? 'published' : 'reviewed',
-              totalScore: Number(finalScore),
-              submittedAt: new Date(memSub.submittedAt || Date.now()),
-              ...(memSub.fileName || memSub.fileUrl
-                ? {
-                    files: {
-                      create: {
-                        fileName: memSub.fileName || 'file_nop_bai',
-                        fileUrl: memSub.fileUrl || '',
-                        fileType: memSub.fileName?.split('.').pop() || 'raw',
-                        fileSize: 0,
-                      },
-                    },
-                  }
-                : {}),
-            },
-            include: { assignment: true, student: true },
-          })
-          memSub.id = dbSubmission.id
-        }
-      } catch (syncErr) {
-        console.warn('Lỗi đồng bộ submission vào DB:', syncErr)
-      }
+    if (!dbSubmission) {
+      return NextResponse.json({ error: 'Không tìm thấy bài nộp trong cơ sở dữ liệu' }, { status: 404 })
     }
 
     // 2. Tìm giáo viên phụ trách để gắn vào Review
-    const teacherProfile = await prisma.teacherProfile.findFirst().catch(() => null)
-
-    const targetSubId = dbSubmission ? dbSubmission.id : id
-
-    if (dbSubmission && teacherProfile) {
-      await prisma.teacherReview.upsert({
-        where: { submissionId: targetSubId },
-        create: {
-          submissionId: targetSubId,
-          teacherId: teacherProfile.id,
-          finalScore: Number(finalScore),
-          finalFeedback: feedback || '',
-          isPublished: Boolean(isPublished),
-          reviewedAt: new Date(),
-        },
-        update: {
-          finalScore: Number(finalScore),
-          finalFeedback: feedback || '',
-          isPublished: Boolean(isPublished),
-          reviewedAt: new Date(),
-        },
-      })
-
-      await prisma.submission.update({
-        where: { id: targetSubId },
-        data: {
-          status: isPublished ? 'published' : 'reviewed',
-          totalScore: Number(finalScore),
-        },
-      })
+    const teacherProfile = await prisma.teacherProfile.findFirst()
+    if (!teacherProfile) {
+      return NextResponse.json({ error: 'Không tìm thấy thông tin giáo viên để lưu đánh giá' }, { status: 400 })
     }
 
-    // 3. Đồng bộ vào memory store để các view hiện tại phản hồi tức thì
-    if (memSub) {
-      memSub.teacherReview = {
+    // 3. Lưu hoặc cập nhật kết quả duyệt điểm vào DB
+    await prisma.teacherReview.upsert({
+      where: { submissionId: dbSubmission.id },
+      create: {
+        submissionId: dbSubmission.id,
+        teacherId: teacherProfile.id,
         finalScore: Number(finalScore),
-        feedback: feedback || '',
-        reviewedAt: new Date().toISOString(),
+        finalFeedback: feedback || '',
         isPublished: Boolean(isPublished),
-      }
-      memSub.status = isPublished ? 'published' : 'reviewed'
-    }
+        reviewedAt: new Date(),
+      },
+      update: {
+        finalScore: Number(finalScore),
+        finalFeedback: feedback || '',
+        isPublished: Boolean(isPublished),
+        reviewedAt: new Date(),
+      },
+    })
+
+    const updatedSubmission = await prisma.submission.update({
+      where: { id: dbSubmission.id },
+      data: {
+        status: isPublished ? 'published' : 'reviewed',
+        totalScore: Number(finalScore),
+      },
+      include: {
+        assignment: true,
+        student: { include: { user: true } },
+        teacherReview: true,
+        aiEvaluation: true,
+      },
+    })
 
     return NextResponse.json({
       message: isPublished ? 'Đã công bố điểm cho học sinh!' : 'Đã lưu bản duyệt điểm của giáo viên vào Database!',
-      submission: memSub || dbSubmission,
+      submission: updatedSubmission,
     })
   } catch (error) {
     console.error('Teacher review error:', error)
-    return NextResponse.json({ error: 'Lỗi duyệt bài' }, { status: 500 })
+    return NextResponse.json({ error: 'Lỗi duyệt bài khi lưu vào cơ sở dữ liệu' }, { status: 500 })
   }
 }

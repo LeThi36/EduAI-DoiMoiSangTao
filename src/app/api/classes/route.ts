@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -26,34 +25,24 @@ export async function GET(request: NextRequest) {
       orderBy: { name: 'asc' },
     })
 
-    if (dbClasses.length > 0) {
-      const classes = dbClasses.map((c) => ({
-        id: c.id,
-        name: c.name,
-        code: c.code,
-        schoolYearId: c.schoolYearId,
-        gradeId: c.gradeId,
-        teacherId: c.teacherId,
-        teacherName: c.teacher?.user?.fullName || 'Giáo viên',
-        studentCount: c._count.enrollments,
-        isActive: c.isActive,
-        isArchived: c.isArchived,
-      }))
-      return NextResponse.json({ classes })
-    }
+    const classes = dbClasses.map((c) => ({
+      id: c.id,
+      name: c.name,
+      code: c.code,
+      schoolYearId: c.schoolYearId,
+      gradeId: c.gradeId,
+      teacherId: c.teacherId,
+      teacherName: c.teacher?.user?.fullName || 'Giáo viên',
+      studentCount: c._count.enrollments,
+      isActive: c.isActive,
+      isArchived: c.isArchived,
+    }))
+
+    return NextResponse.json({ classes })
   } catch (err) {
-    console.warn('Lỗi đọc lớp từ Prisma DB, chuyển sang fallback store:', err)
+    console.error('Lỗi đọc lớp từ Prisma DB:', err)
+    return NextResponse.json({ error: 'Không thể đọc dữ liệu lớp học từ cơ sở dữ liệu' }, { status: 500 })
   }
-
-  let classes = store.classes
-  if (schoolYearId) {
-    classes = classes.filter((c) => c.schoolYearId === schoolYearId)
-  }
-  if (gradeId) {
-    classes = classes.filter((c) => c.gradeId === gradeId)
-  }
-
-  return NextResponse.json({ classes })
 }
 
 export async function POST(request: NextRequest) {
@@ -98,8 +87,6 @@ export async function POST(request: NextRequest) {
       isActive: createdClass.isActive,
       isArchived: createdClass.isArchived,
     }
-
-    store.classes.push(classData)
 
     return NextResponse.json({ message: 'Tạo lớp thành công', class: classData }, { status: 201 })
   } catch (error: any) {

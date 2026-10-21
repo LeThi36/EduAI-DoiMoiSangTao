@@ -1,8 +1,5 @@
-import { unlink } from 'node:fs/promises'
-import path from 'node:path'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { store } from '@/lib/data-store'
 import { cloudinaryService } from '@/lib/cloudinary/cloudinary.service'
 
 function validateAssignment(body: Record<string, unknown>) {
@@ -39,8 +36,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     const maxAttempts = body.maxAttempts !== undefined ? Math.max(0, Number(body.maxAttempts) || 0) : 1
     const durationMinutes = body.durationMinutes !== undefined ? Math.max(0, Number(body.durationMinutes) || 0) : 20
     const rawTargetClasses = Array.isArray(body.targetClassIds) ? body.targetClassIds : []
-    const index = store.assignments.findIndex((assignment) => assignment.id === id)
-    const previous = index >= 0 ? store.assignments[index] : null
+    const previous = await prisma.assignment.findUnique({
+      where: { id },
+      include: { distributions: true, questions: { include: { options: true } } },
+    }).catch(() => null)
 
     // 1. Cập nhật trong Prisma DB Supabase
     let updatedDbAssignment: any = null
@@ -70,7 +69,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
             durationMinutes,
             attachments: Array.isArray(body.attachments)
               ? body.attachments
-              : (body.rubric as any)?.attachments || previous?.attachments || [],
+              : (body.rubric as any)?.attachments || (previous?.rubric as any)?.attachments || [],
           },
         },
         include: {
@@ -218,55 +217,41 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   try {
     const { id } = await params
 
-    // 1. Xóa trong Prisma DB Supabase
-    try {
-      await prisma.submissionAnswer.deleteMany({
-        where: { submission: { assignmentId: id } },
-      }).catch(() => {})
-      await prisma.submission.deleteMany({
-        where: { assignmentId: id },
-      }).catch(() => {})
-      await prisma.assignmentDistribution.deleteMany({
-        where: { assignmentId: id },
-      }).catch(() => {})
-      await prisma.questionOption.deleteMany({
-        where: { question: { assignmentId: id } },
-      }).catch(() => {})
-      await prisma.question.deleteMany({
-        where: { assignmentId: id },
-      }).catch(() => {})
-      await prisma.assignment.delete({
-        where: { id },
-      }).catch(() => {})
-    } catch (dbErr) {
-      console.warn('Lỗi khi xóa assignment trong Prisma DB:', dbErr)
-    }
-
-    // 2. Xóa attachments trên Cloudinary hoặc ổ cứng nếu có
-    const assignment = store.assignments.find((item) => item.id === id)
-    if (assignment) {
+    // 1. Xóa attachments trên Cloudinary nếu có
+    const dbAssignment = await prisma.assignment.findUnique({ where: { id } }).catch(() => null)
+    const attachments = (dbAssignment?.rubric as any)?.attachments || []
+    if (attachments.length > 0) {
       await Promise.all(
-        (assignment.attachments || []).map(async (attachment: any) => {
+        attachments.map(async (attachment: any) => {
           if (attachment.publicId) {
             await cloudinaryService.delete(
               attachment.publicId,
               attachment.mimeType?.startsWith('image/') ? 'image' : 'raw'
             ).catch(() => {})
-          } else if (!attachment.url?.includes('cloudinary.com')) {
-            const fileName = path.basename(attachment.url)
-            try {
-              await unlink(path.join(process.cwd(), 'public', 'uploads', 'assignments', fileName))
-            } catch (error: any) {
-              if (error.code !== 'ENOENT') throw error
-            }
           }
         })
       )
     }
 
-    // 3. Xóa trong store in-memory
-    store.assignments = store.assignments.filter((item) => item.id !== id)
-    store.submissions = store.submissions.filter((submission) => submission.assignmentId !== id)
+    // 2. Xóa trong Prisma DB Supabase
+    await prisma.submissionAnswer.deleteMany({
+      where: { submission: { assignmentId: id } },
+    }).catch(() => {})
+    await prisma.submission.deleteMany({
+      where: { assignmentId: id },
+    }).catch(() => {})
+    await prisma.assignmentDistribution.deleteMany({
+      where: { assignmentId: id },
+    }).catch(() => {})
+    await prisma.questionOption.deleteMany({
+      where: { question: { assignmentId: id } },
+    }).catch(() => {})
+    await prisma.question.deleteMany({
+      where: { assignmentId: id },
+    }).catch(() => {})
+    await prisma.assignment.delete({
+      where: { id },
+    })
 
     return NextResponse.json({ message: 'Đã xóa bài tập và các bài nộp liên quan' })
   } catch (error) {
