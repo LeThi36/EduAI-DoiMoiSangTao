@@ -76,9 +76,7 @@ async function getLatestSubmissionsOfClass(
           content:
             evalJson?.submissionContent ||
             (evalJson as any)?.content ||
-            s.answers.map((a) => a.answer).filter(Boolean).join('\n') ||
-            store.submissions.find((m) => m.id === s.id)?.content ||
-            '',
+            s.answers.map((a) => a.answer).filter(Boolean).join('\n') || '',
           fileName: file?.fileName || '',
           fileUrl: file?.fileUrl || '',
           quizResult: evalJson?.quizResult,
@@ -112,32 +110,6 @@ async function getLatestSubmissionsOfClass(
     console.warn('[BatchGrading] Lỗi đọc bài nộp từ Prisma DB:', err)
   }
 
-  // 2. Bổ sung từ memory store nếu có bài nộp mới hơn hoặc chưa lưu vào DB
-  for (const sub of store.submissions) {
-    const matchAsg =
-      sub.assignmentId === assignmentId ||
-      sub.assignmentTitle === assignmentId ||
-      (assignmentAltId && (sub.assignmentId === assignmentAltId || sub.assignmentTitle === assignmentAltId))
-    if (!matchAsg) continue
-
-    const matchesClass =
-      sub.className === className ||
-      sub.classId === classId ||
-      store.students.some(
-        (st) =>
-          (st.id === sub.studentId || st.studentId === sub.studentId) &&
-          (st.classId === classId || st.className === className)
-      ) ||
-      (!sub.classId && !sub.className)
-
-    if (!matchesClass) continue
-
-    const prev = latest.get(sub.studentId)
-    if (!prev || new Date(sub.submittedAt).getTime() > new Date(prev.submittedAt).getTime()) {
-      latest.set(sub.studentId, sub)
-    }
-  }
-
   return [...latest.values()]
 }
 
@@ -160,10 +132,9 @@ export async function POST(request: NextRequest) {
     const { assignmentId, classId, studentIds, regrade } = body
     const batchSize = Math.min(50, Math.max(1, Number(body.batchSize) || 5))
 
-    // 1. Tìm Assignment trong store hoặc Database Supabase
-    let assignment = store.assignments.find((a) => a.id === assignmentId || a.title === assignmentId)
-    if (!assignment) {
-      try {
+    // 1. Lấy Assignment trực tiếp từ database
+    let assignment: AssignmentItem | undefined
+    try {
         const dbA = await prisma.assignment.findFirst({
           where: {
             OR: [{ id: assignmentId }, { title: assignmentId }],
@@ -203,17 +174,14 @@ export async function POST(request: NextRequest) {
             })),
           }
           assignment = mappedAssignment
-          store.assignments.push(mappedAssignment)
         }
-      } catch (err) {
-        console.warn('Lỗi tìm assignment trong Prisma DB:', err)
-      }
+    } catch (err) {
+      console.warn('Lỗi tìm assignment trong Prisma DB:', err)
     }
 
-    // 2. Tìm Class trong store hoặc Database Supabase
-    let cls = store.classes.find((c) => c.id === classId || c.name === classId || c.code === classId)
-    if (!cls) {
-      try {
+    // 2. Lấy lớp trực tiếp từ database
+    let cls: { id: string; name: string; code: string } | undefined
+    try {
         const dbC = await prisma.class.findFirst({
           where: {
             OR: [{ id: classId }, { code: classId }, { name: classId }],
@@ -224,39 +192,10 @@ export async function POST(request: NextRequest) {
             id: dbC.id,
             name: dbC.name,
             code: dbC.code,
-            schoolYearId: dbC.schoolYearId,
-            gradeId: dbC.gradeId,
-            teacherId: dbC.teacherId,
-            teacherName: 'Giáo viên',
-            studentCount: 0,
-            isActive: dbC.isActive,
-            isArchived: dbC.isArchived,
           }
-          store.classes.push(cls)
         }
-      } catch (err) {
-        console.warn('Lỗi tìm class trong Prisma DB:', err)
-      }
-    }
-
-    // 3. Nếu vẫn chưa tìm thấy class (do ID tùy biến từ client), kiểm tra trong danh sách học sinh
-    if (!cls && classId) {
-      const studentWithClass = store.students.find((s) => s.classId === classId || s.className === classId)
-      if (studentWithClass) {
-        cls = {
-          id: studentWithClass.classId || classId,
-          name: studentWithClass.className || classId,
-          code: studentWithClass.className || classId,
-          schoolYearId: studentWithClass.schoolYearId || '',
-          gradeId: '',
-          teacherId: '',
-          teacherName: 'Giáo viên',
-          studentCount: 1,
-          isActive: true,
-          isArchived: false,
-        }
-        store.classes.push(cls)
-      }
+    } catch (err) {
+      console.warn('Lỗi tìm class trong Prisma DB:', err)
     }
 
     if (!assignment || !cls) {
@@ -330,7 +269,7 @@ export async function POST(request: NextRequest) {
         try {
           let dbSubmission = await prisma.submission.findUnique({ where: { id: sub.id } })
 
-          // Nếu chưa có trong DB (tồn tại từ memory store), tạo bản ghi submission trong DB
+          // Tạo bản ghi nếu bài nộp chưa tồn tại trong database.
           if (!dbSubmission) {
             const dbStu = await prisma.studentProfile.findFirst({
               where: {

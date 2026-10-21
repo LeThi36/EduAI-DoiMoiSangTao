@@ -156,35 +156,4 @@ export interface SubmissionItem {
   }
 }
 
-// Initial default data
-class DataStore {
-  schoolYears: SchoolYearItem[] = [
-    { id: 'sy-2026-2027', name: 'Năm học 2026 - 2027', startYear: 2026, endYear: 2027, isActive: true, isArchived: false },
-    { id: 'sy-2025-2026', name: 'Năm học 2025 - 2026', startYear: 2025, endYear: 2026, isActive: false, isArchived: true },
-  ]
-
-  grades: GradeItem[] = [
-    { id: 'g-1', level: 1, name: 'Khối 1' },
-    { id: 'g-2', level: 2, name: 'Khối 2' },
-    { id: 'g-3', level: 3, name: 'Khối 3' },
-    { id: 'g-4', level: 4, name: 'Khối 4' },
-    { id: 'g-5', level: 5, name: 'Khối 5' },
-  ]
-
-  classes: ClassItem[] = []
-
-  students: StudentItem[] = []
-
-  assignments: AssignmentItem[] = []
-
-  submissions: SubmissionItem[] = []
-
-}
-
-// Global singleton instance
-const globalStore = globalThis as unknown as { __eduai_datastore?: DataStore }
-export const store = globalStore.__eduai_datastore ?? new DataStore()
-if (process.env.NODE_ENV !== 'production') {
-  globalStore.__eduai_datastore = store
-}
 

@@ -128,79 +128,33 @@ export async function POST(request: NextRequest) {
   try {
     const { assignmentId, studentId, content, fileName, fileUrl, answers, isAutoSubmitted } = await request.json()
 
-    let assignment = store.assignments.find((a) => a.id === assignmentId || a.title === assignmentId)
-    if (!assignment) {
-      try {
-        const dbA = await prisma.assignment.findFirst({
-          where: { OR: [{ id: assignmentId }, { title: assignmentId }] },
-          include: { questions: { include: { options: true } } },
-        })
-        if (dbA) {
-          assignment = {
-            id: dbA.id,
-            title: dbA.title,
-            description: dbA.description,
-            type: dbA.type as any,
-            gradeLevel: dbA.gradeLevel,
-            maxScore: dbA.maxScore,
-            targetClassIds: [],
-            startDate: dbA.startDate?.toISOString() || '',
-            dueDate: dbA.dueDate?.toISOString() || '',
-            isPublished: dbA.isPublished,
-            rubric: (dbA.rubric as any) || { criteria: [] },
-            aiPrompt: dbA.aiPrompt,
-            maxAttempts: dbA.maxAttempts,
-            questions: dbA.questions.map((q) => ({
-              id: q.id,
-              content: q.content,
-              type: q.type as any,
-              maxScore: q.maxScore,
-              correctAnswer: q.correctAnswer || undefined,
-              options: q.options.map((opt) => ({
-                label: opt.label,
-                text: opt.content,
-                isCorrect: opt.isCorrect,
-              })),
-            })),
-          }
-          store.assignments.push(assignment)
-        }
-      } catch {}
+    const dbAssignment = await prisma.assignment.findFirst({
+      where: { OR: [{ id: assignmentId }, { title: assignmentId }] },
+      include: { questions: { include: { options: true }, orderBy: { orderIndex: 'asc' } } },
+    })
+    const dbStudentProfile = await prisma.studentProfile.findFirst({
+      where: { OR: [{ id: studentId }, { studentId }, { userId: studentId }, { user: { username: studentId } }] },
+      include: { user: true, enrollments: { include: { class: true } } },
+    })
+    const assignment = dbAssignment && {
+      id: dbAssignment.id,
+      title: dbAssignment.title,
+      type: dbAssignment.type as 'multiple_choice' | 'essay' | 'practice',
+      gradeLevel: dbAssignment.gradeLevel,
+      maxScore: dbAssignment.maxScore,
+      maxAttempts: dbAssignment.maxAttempts,
+      questions: dbAssignment.questions.map((q) => ({
+        id: q.id, content: q.content, maxScore: q.maxScore,
+        options: q.options.map((o) => ({ label: o.label, text: o.content, isCorrect: o.isCorrect })),
+      })),
     }
-
-    let student = store.students.find(
-      (s) => s.id === studentId || s.studentId === studentId || s.username === studentId
-    )
-    if (!student) {
-      try {
-        const dbS = await prisma.studentProfile.findFirst({
-          where: {
-            OR: [
-              { id: studentId },
-              { studentId: studentId },
-              { userId: studentId },
-              { user: { username: studentId } },
-            ],
-          },
-          include: { user: true, enrollments: { include: { class: true } } },
-        })
-        if (dbS) {
-          const cls = dbS.enrollments[0]?.class
-          student = {
-            id: dbS.userId,
-            studentId: dbS.studentId,
-            username: dbS.user.username || dbS.studentId,
-            fullName: dbS.user.fullName,
-            classId: cls?.id || '',
-            className: cls?.name || '',
-            gradeLevel: cls?.name ? Number(cls.name.split('/')[0]) : 3,
-            schoolYearId: cls?.schoolYearId || '',
-            email: dbS.user.email,
-            status: 'active',
-          }
-          store.students.push(student)
-        }
-      } catch {}
+    const enrolledClass = dbStudentProfile?.enrollments[0]?.class
+    const student = dbStudentProfile && {
+      id: dbStudentProfile.userId,
+      studentId: dbStudentProfile.studentId,
+      fullName: dbStudentProfile.user.fullName,
+      classId: enrolledClass?.id || '',
+      className: enrolledClass?.name || '',
     }
 
     if (!assignment || !student) {
@@ -208,9 +162,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Check maximum attempts allowed by teacher
-    const existingSubmissions = store.submissions.filter(
-      (s) => s.assignmentId === assignmentId && s.studentId === studentId
-    )
+    const existingSubmissions = await prisma.submission.findMany({
+      where: { assignmentId: dbAssignment.id, studentId: dbStudentProfile.id },
+    })
     if (
       assignment.maxAttempts &&
       assignment.maxAttempts > 0 &&
@@ -269,10 +223,15 @@ export async function POST(request: NextRequest) {
       const correctCount = gradedItems.filter((g) => g.isCorrect).length
 
       // 2. AI analysis (explanations for wrong answers, student feedback, teacher insight)
-      const history = store.submissions
-        .filter((s) => s.studentId === student.id && s.quizResult)
-        .slice(0, 5)
-        .map((s) => ({ title: s.assignmentTitle, score: s.quizResult!.score, maxScore: s.quizResult!.maxScore }))
+      const history = (await prisma.submission.findMany({
+        where: { studentId: dbStudentProfile.id },
+        include: { assignment: true, aiEvaluation: true },
+        orderBy: { submittedAt: 'desc' },
+        take: 5,
+      })).flatMap((submission) => {
+        const quizResult = (submission.aiEvaluation?.resultJson as { quizResult?: QuizResult } | null)?.quizResult
+        return quizResult ? [{ title: submission.assignment.title, score: quizResult.score, maxScore: quizResult.maxScore }] : []
+      })
 
       const analysis = await QuizFeedbackService.analyze({
         assignmentTitle: assignment.title,
@@ -395,7 +354,6 @@ export async function POST(request: NextRequest) {
         console.warn('Lỗi lưu submission trắc nghiệm vào DB:', dbErr)
       }
 
-      store.submissions.unshift(sub)
       return NextResponse.json({
         message: isAutoSubmitted ? 'Hết giờ! Hệ thống đã tự động nộp bài của em.' : 'Nộp bài thành công',
         submission: sub,
@@ -512,8 +470,6 @@ export async function POST(request: NextRequest) {
     } catch (dbErr) {
       console.warn('Lỗi lưu submission thực hành vào DB:', dbErr)
     }
-
-    store.submissions.unshift(newSub)
 
     return NextResponse.json({ message: 'Nộp bài thành công', submission: newSub }, { status: 201 })
   } catch (error) {

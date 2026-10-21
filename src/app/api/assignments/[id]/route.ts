@@ -41,21 +41,23 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       include: { distributions: true, questions: { include: { options: true } } },
     }).catch(() => null)
 
-    // 1. Cập nhật trong Prisma DB Supabase
-    let updatedDbAssignment: any = null
+    let updatedDbAssignment
     try {
-      // Xóa và tạo lại distributions nếu có
-      if (rawTargetClasses.length > 0) {
-        await prisma.assignmentDistribution.deleteMany({ where: { assignmentId: id } }).catch(() => {})
+      if (!previous) {
+        return NextResponse.json({ error: 'Không tìm thấy bài tập' }, { status: 404 })
+      }
+
+      if (Array.isArray(body.targetClassIds)) {
+        await prisma.assignmentDistribution.deleteMany({ where: { assignmentId: id } })
         await prisma.assignmentDistribution.createMany({
           data: rawTargetClasses.map((clsId: string) => ({
             assignmentId: id,
             classId: clsId,
           })),
-        }).catch(() => {})
+        })
       }
 
-      updatedDbAssignment = await prisma.assignment.update({
+      await prisma.assignment.update({
         where: { id },
         data: {
           title: String(body.title).trim(),
@@ -72,58 +74,50 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
               : (body.rubric as any)?.attachments || (previous?.rubric as any)?.attachments || [],
           },
         },
-        include: {
-          distributions: true,
-          questions: { include: { options: true } },
-        },
+      })
+
+      if (Array.isArray(body.questions)) {
+        await prisma.questionOption.deleteMany({ where: { question: { assignmentId: id } } })
+        await prisma.question.deleteMany({ where: { assignmentId: id } })
+        await prisma.question.createMany({
+          data: body.questions.map((question: any, index: number) => ({
+            assignmentId: id,
+            orderIndex: index + 1,
+            content: String(question.content || '').trim(),
+            type: question.type || (body.type === 'multiple_choice' ? 'single_choice' : 'essay'),
+            maxScore: Number(question.maxScore) || 1,
+            correctAnswer: question.correctAnswer || null,
+          })),
+        })
+        const savedQuestions = await prisma.question.findMany({
+          where: { assignmentId: id },
+          orderBy: { orderIndex: 'asc' },
+        })
+        await Promise.all(savedQuestions.map((question, index) =>
+          prisma.questionOption.createMany({
+            data: (body.questions[index]?.options || []).map((option: any, optionIndex: number) => ({
+              questionId: question.id,
+              label: String.fromCharCode(65 + optionIndex),
+              content: String(option.text || '').trim(),
+              isCorrect: Boolean(option.isCorrect),
+            })),
+          })
+        ))
+      }
+
+      updatedDbAssignment = await prisma.assignment.findUnique({
+        where: { id },
+        include: { distributions: true, questions: { include: { options: true }, orderBy: { orderIndex: 'asc' } } },
       })
     } catch (dbErr) {
       console.warn('Lỗi cập nhật assignment trong Prisma DB:', dbErr)
     }
 
-    // 2. Cập nhật trong store in-memory (fallback & sync)
-    const questions = Array.isArray(body.questions)
-      ? body.questions.map((question: any, questionIndex: number) => ({
-          id: question.id || previous?.questions?.[questionIndex]?.id || `q-${Date.now()}-${questionIndex + 1}`,
-          content: question.content.trim(),
-          type: question.type || (body.type === 'multiple_choice' ? 'single_choice' : 'essay'),
-          options: Array.isArray(question.options)
-            ? question.options.map((option: { text: string; isCorrect: boolean }, optionIndex: number) => ({
-                label: String.fromCharCode(65 + optionIndex),
-                text: option.text.trim(),
-                isCorrect: Boolean(option.isCorrect),
-              }))
-            : undefined,
-          maxScore: Number(question.maxScore) || 1,
-        }))
-      : previous?.questions || []
-
-    const updated = {
-      id,
-      title: String(body.title).trim(),
-      description: String(body.description || ''),
-      type: body.type,
-      gradeLevel: Number(body.gradeLevel),
-      targetClassIds: rawTargetClasses.length > 0 ? rawTargetClasses : previous?.targetClassIds || [],
-      aiPrompt: String(body.aiPrompt || ''),
-      maxAttempts,
-      durationMinutes,
-      questions,
-      maxScore: 10,
-      startDate: previous?.startDate || new Date().toISOString(),
-      dueDate: previous?.dueDate || new Date(Date.now() + 14 * 86400000).toISOString(),
-      isPublished: true,
-      rubric: body.rubric || previous?.rubric || { criteria: [] },
-      attachments: Array.isArray(body.attachments) ? body.attachments : [],
+    if (!updatedDbAssignment) {
+      return NextResponse.json({ error: 'Không thể cập nhật bài tập trong cơ sở dữ liệu' }, { status: 500 })
     }
 
-    if (index >= 0) {
-      store.assignments[index] = updated
-    } else {
-      store.assignments.unshift(updated)
-    }
-
-    return NextResponse.json({ message: 'Đã cập nhật bài tập', assignment: updated })
+    return NextResponse.json({ message: 'Đã cập nhật bài tập', assignment: updatedDbAssignment })
   } catch (error) {
     console.error('Update assignment error:', error)
     return NextResponse.json({ error: 'Không thể cập nhật bài tập' }, { status: 500 })
@@ -179,24 +173,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           targetClassIds: updatedDb.distributions.map((d) => d.classId),
           rubric: (updatedDb.rubric as any) || { criteria: [] },
           aiPrompt: updatedDb.aiPrompt,
-          attachments: (updatedDb.rubric as any)?.attachments || (store.assignments.find((s) => s.id === updatedDb.id)?.attachments) || [],
+          attachments: (updatedDb.rubric as any)?.attachments || [],
         }
       }
     } catch (dbErr) {
       console.warn('Lỗi khi cập nhật cấu hình assignment trong Prisma DB:', dbErr)
-    }
-
-    // 2. Cập nhật hoặc đồng bộ hóa trong store in-memory
-    const index = store.assignments.findIndex((assignment) => assignment.id === id)
-    if (index >= 0) {
-      const target = store.assignments[index]
-      if (maxAttempts !== undefined) target.maxAttempts = maxAttempts
-      if (durationMinutes !== undefined) target.durationMinutes = durationMinutes
-      if (!updatedAssignment) {
-        updatedAssignment = target
-      }
-    } else if (updatedAssignment) {
-      store.assignments.push(updatedAssignment)
     }
 
     if (!updatedAssignment) {
