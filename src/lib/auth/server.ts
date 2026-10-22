@@ -15,9 +15,10 @@ export const AuthService = {
    * Đăng nhập người dùng bằng tên tài khoản (username, studentId hoặc email) và mật khẩu.
    * Ưu tiên kiểm tra trực tiếp Database Supabase qua Prisma ORM.
    */
-  async signIn(identifier: string, password: string): Promise<AuthResult & { role?: string; fullName?: string }> {
+  async signIn(identifier: string, password: string): Promise<AuthResult & { role?: string; fullName?: string; token?: string }> {
     const cookieStore = await cookies()
-    const cleanId = (identifier || '').trim().toLowerCase()
+    const rawId = (identifier || '').trim()
+    const cleanId = rawId.toLowerCase()
 
     if (!cleanId || !password) {
       return {
@@ -26,6 +27,8 @@ export const AuthService = {
       }
     }
 
+    let dbErrorOccurred = false
+
     // 1. Kiểm tra tài khoản trong Database Supabase PostgreSQL
     try {
       const dbUser = await prisma.user.findFirst({
@@ -33,7 +36,9 @@ export const AuthService = {
           OR: [
             { email: { equals: cleanId, mode: 'insensitive' } },
             { username: { equals: cleanId, mode: 'insensitive' } },
+            { username: { equals: rawId, mode: 'insensitive' } },
             { studentProfile: { studentId: { equals: cleanId, mode: 'insensitive' } } },
+            { studentProfile: { studentId: { equals: rawId, mode: 'insensitive' } } },
           ],
         },
         include: {
@@ -77,11 +82,13 @@ export const AuthService = {
           user: { id: dbUser.id, email: dbUser.email },
           role: roleName,
           fullName: dbUser.fullName,
+          token,
           error: null,
         }
       }
     } catch (dbErr) {
-      console.warn('Lỗi truy vấn Database khi đăng nhập:', dbErr)
+      dbErrorOccurred = true
+      console.error('Lỗi truy vấn Database khi đăng nhập:', dbErr)
     }
 
     // 2. Thử Supabase Auth (dành cho tài khoản xác thực qua Supabase Auth nếu có)
@@ -117,11 +124,19 @@ export const AuthService = {
             user: { id: data.user.id, email: data.user.email ?? '' },
             role: roleName,
             fullName,
+            token,
             error: null,
           }
         }
       } catch (err) {
         console.warn('Supabase auth attempt failed:', err)
+      }
+    }
+
+    if (dbErrorOccurred && !hasValidSupabase) {
+      return {
+        user: null,
+        error: 'Lỗi kết nối cơ sở dữ liệu. Vui lòng kiểm tra lại kết nối mạng hoặc liên hệ quản trị viên.',
       }
     }
 

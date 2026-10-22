@@ -16,12 +16,13 @@ type AIFeedback = Pick<QuizResult, 'studentFeedback' | 'teacherInsight'> & {
   explanations: { questionId: string; explanation: string; hint: string }[]
 }
 
-const SYSTEM_PROMPT = `Bạn là trợ lý giáo viên Tin học tiểu học tại Việt Nam.
-Nhiệm vụ: phân tích bài trắc nghiệm ĐÃ ĐƯỢC CHẤM theo đáp án của giáo viên (không chấm lại điểm).
-- Với mỗi câu SAI: giải thích ngắn gọn, dễ hiểu cho học sinh tiểu học vì sao đáp án em chọn chưa đúng và vì sao đáp án đúng là đúng; kèm một gợi ý ghi nhớ.
-- Viết nhận xét chung cho học sinh: xưng "em", giọng khích lệ, 2-4 câu.
-- Viết phân tích cho giáo viên: khách quan, chỉ ra kiến thức đã nắm, kiến thức còn yếu, quan niệm sai (nếu có) và đề xuất hướng hỗ trợ cụ thể.
-Chỉ trả về JSON hợp lệ đúng schema được yêu cầu, bằng tiếng Việt.`
+const SYSTEM_PROMPT = `Bạn là một giáo viên Tiểu học ân cần tại Việt Nam.
+Nhiệm vụ: phân tích bài trắc nghiệm của học sinh Tiểu học đã được chấm theo đáp án của giáo viên.
+- Viết nhận xét tự nhiên, thân thiện bằng các câu văn hoàn chỉnh, có chủ ngữ - vị ngữ (ví dụ: "Thầy/Cô thấy em...", "Em cần chú ý...").
+- TUYỆT ĐỐI KHÔNG chép lại câu hỏi hoặc phép tính máy móc (như "Câu 1: 2+2=") vào nhận xét hay danh sách khái niệm. Hãy diễn đạt thành tên khái niệm hoặc kỹ năng (ví dụ: "Phép cộng các số trong phạm vi 10").
+- Với câu SAI: giải thích ngắn gọn, ân cần vì sao đáp án chưa chính xác và hướng dẫn cách làm đúng.
+- Nhận xét cho học sinh: giọng khích lệ, thân thiện, dễ hiểu với học sinh Tiểu học.
+- Trả về duy nhất JSON hợp lệ theo đúng schema.`
 
 function buildPrompt(input: QuizFeedbackInput): string {
   const lines = input.items.map((it) =>
@@ -142,8 +143,12 @@ function fallback(input: QuizFeedbackInput): AIFeedback {
         : `Em đúng ${right.length}/${input.items.length} câu. Đừng nản nhé! Em hãy đọc kỹ phần giải thích các câu sai và ôn lại bài cùng thầy cô.`,
     teacherInsight: {
       summary: `${input.studentName} đạt ${input.score}/${input.maxScore}, đúng ${right.length}/${input.items.length} câu.`,
-      masteredConcepts: right.map((i) => `Câu ${i.index}: ${short(i.content)}`),
-      weakConcepts: wrong.map((i) => `Câu ${i.index}: ${short(i.content)}`),
+      masteredConcepts: right.length > 0
+        ? [`Đã nắm vững và trả lời đúng ${right.length}/${input.items.length} câu hỏi (${right.map((i) => `Câu ${i.index}`).join(', ')}).`]
+        : [],
+      weakConcepts: wrong.length > 0
+        ? [`Cần lưu ý ôn tập lại các câu chưa làm đúng (${wrong.map((i) => `Câu ${i.index}`).join(', ')}).`]
+        : [],
       misconceptions: wrong.map(
         (i) => `Câu ${i.index}: nhầm "${i.selectedText ?? i.selectedLabel}" với "${i.correctText ?? i.correctLabel}"`
       ),

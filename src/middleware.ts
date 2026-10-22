@@ -53,7 +53,10 @@ export async function middleware(request: NextRequest) {
   // Attach cookie changes (refresh or clear) to any response we return
   const finalize = async (res: NextResponse) => {
     if (session) {
-      res.cookies.set(SESSION_COOKIE, await refreshSessionToken(session), sessionCookieOptions)
+      const refreshed = await refreshSessionToken(session)
+      if (refreshed) {
+        res.cookies.set(SESSION_COOKIE, refreshed, sessionCookieOptions)
+      }
     } else if (sessionExpired) {
       res.cookies.delete(SESSION_COOKIE)
     }

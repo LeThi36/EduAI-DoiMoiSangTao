@@ -39,8 +39,19 @@ function buildAISuggestedFeedback(sub?: any): string {
   if (ai) {
     const isZero = Number(ai.score ?? 0) === 0
     const parts: string[] = []
+
     if (ai.strengths) {
-      parts.push(`🌟 Điểm tốt: ${ai.strengths.trim()}`)
+      const s = ai.strengths.trim()
+      const isZeroWrong = /(đúng 0|0\/\d+|0 câu|chưa đúng|chưa có câu)/i.test(s)
+      if (isZero || isZeroWrong) {
+        if (isZeroWrong) {
+          parts.push(`📝 Tình trạng: Học sinh chưa có câu trả lời chính xác trong lần làm bài này.`)
+        } else {
+          parts.push(`🌟 Ghi nhận: ${s}`)
+        }
+      } else {
+        parts.push(`🌟 Điểm tốt: ${s}`)
+      }
     }
     if (
       ai.weaknesses &&
@@ -175,11 +186,15 @@ export default function GradingPage() {
       const studentSubs = submissions.filter(
         (sub) =>
           sub.assignmentId === currentAssignment.id &&
-          (sub.studentId === st.id || sub.studentCode === st.studentId)
+          (sub.studentId === st.id ||
+            sub.studentCode === st.studentId ||
+            (sub.studentProfileId && (st as any).studentProfileId && sub.studentProfileId === (st as any).studentProfileId))
       )
-      studentSubs.sort(
-        (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-      )
+      studentSubs.sort((a, b) => {
+        const attemptDiff = Number(b.attemptNumber || 0) - Number(a.attemptNumber || 0)
+        if (attemptDiff !== 0) return attemptDiff
+        return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+      })
       const latestSub = studentSubs[0] || null
 
       return {
@@ -335,10 +350,22 @@ export default function GradingPage() {
 
       const data = await res.json()
       if (res.ok) {
-        setBatchNotice({
-          type: 'success',
-          message: `${data.message}${data.remaining > 0 ? ` (Còn ${data.remaining} bài chờ chấm)` : ' • Hoàn tất toàn bộ lớp!'}`,
-        })
+        if (data.failed && data.failed.length > 0 && (!data.graded || data.graded.length === 0)) {
+          setBatchNotice({
+            type: 'error',
+            message: `${data.message}. Chi tiết: ${data.failed.map((f: any) => `${f.studentName} (${f.error})`).join('; ')}`,
+          })
+        } else if (data.failed && data.failed.length > 0) {
+          setBatchNotice({
+            type: 'error',
+            message: `${data.message}. Lỗi: ${data.failed.map((f: any) => `${f.studentName} (${f.error})`).join('; ')}`,
+          })
+        } else {
+          setBatchNotice({
+            type: 'success',
+            message: `${data.message}${data.remaining > 0 ? ` (Còn ${data.remaining} bài chờ chấm)` : ' • Hoàn tất toàn bộ lớp!'}`,
+          })
+        }
         loadData()
         setSelectedStudentIdsForGrading([])
       } else {
@@ -375,10 +402,17 @@ export default function GradingPage() {
       })
       const data = await res.json()
       if (res.ok) {
-        setBatchNotice({
-          type: 'success',
-          message: data.message || 'AI đã hoàn thành chấm bài cho học sinh!',
-        })
+        if (data.failed && data.failed.length > 0) {
+          setBatchNotice({
+            type: 'error',
+            message: `Chấm bài thất bại: ${data.failed.map((f: any) => f.error).join('; ')}`,
+          })
+        } else {
+          setBatchNotice({
+            type: 'success',
+            message: data.message || 'AI đã hoàn thành chấm bài cho học sinh!',
+          })
+        }
         loadData()
       } else {
         setBatchNotice({
@@ -574,17 +608,6 @@ export default function GradingPage() {
             <Download className="w-4 h-4" />
             <span>Xuất file Excel đánh giá</span>
           </button>
-
-          {currentAssignment && (
-            <button
-              onClick={() => openConfigModal(currentAssignment)}
-              className="btn-secondary text-xs flex items-center gap-1.5 py-2 px-3 border-primary-500/30 text-primary-300 hover:bg-primary-500/10"
-              title="Cài đặt thời gian đếm ngược và số lần nộp bài"
-            >
-              <Timer className="w-4 h-4 text-primary-400" />
-              <span>Cài đặt thời gian & số lần làm</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -718,8 +741,8 @@ export default function GradingPage() {
                   type="button"
                   onClick={() => setBatchSize(val as any)}
                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors border ${batchSize === val
-                      ? 'bg-purple-500 text-white border-purple-500 shadow-sm'
-                      : 'bg-surface-main text-text-muted border-border-default hover:text-text-primary'
+                    ? 'bg-purple-500 text-white border-purple-500 shadow-sm'
+                    : 'bg-surface-main text-text-muted border-border-default hover:text-text-primary'
                     }`}
                 >
                   {val === 'all' ? 'Toàn bộ lớp' : `${val} HS/lần`}
@@ -756,8 +779,8 @@ export default function GradingPage() {
         {batchNotice && (
           <div
             className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-2 animate-scale-in ${batchNotice.type === 'success'
-                ? 'bg-accent-500/15 border-accent-500/40 text-accent-300'
-                : 'bg-danger-500/15 border-danger-500/40 text-danger-300'
+              ? 'bg-accent-500/15 border-accent-500/40 text-accent-300'
+              : 'bg-danger-500/15 border-danger-500/40 text-danger-300'
               }`}
           >
             <div className="flex items-center gap-2">
@@ -838,8 +861,8 @@ export default function GradingPage() {
                   <div
                     key={st.id}
                     className={`p-3 rounded-xl border transition-all cursor-pointer text-xs ${isSelected
-                        ? 'bg-primary-500/15 border-primary-500 shadow-md shadow-primary-500/15'
-                        : 'bg-surface-card hover:bg-surface-card-hover border-border-default/70 hover:border-primary-500/40'
+                      ? 'bg-primary-500/15 border-primary-500 shadow-md shadow-primary-500/15'
+                      : 'bg-surface-card hover:bg-surface-card-hover border-border-default/70 hover:border-primary-500/40'
                       }`}
                   >
                     <div className="flex items-start gap-2.5">
@@ -973,49 +996,6 @@ export default function GradingPage() {
                   </div>
                 </div>
 
-                {/* 2. Quy định làm bài của bài tập này (Card thời gian, số lần làm + Nút Chỉnh sửa quy định) */}
-                {currentAssignment && (
-                  <div className="p-3.5 rounded-xl bg-surface-main/80 border border-primary-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-primary-500/10 flex items-center justify-center text-primary-400">
-                        <Timer className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="font-semibold text-text-primary">
-                          Quy định làm bài của bài tập này:
-                        </p>
-                        <div className="flex items-center gap-3 text-[11px] text-text-muted mt-0.5">
-                          <span>
-                            ⏱️ Thời gian:{' '}
-                            <strong className="text-accent-400">
-                              {currentAssignment.durationMinutes
-                                ? `${currentAssignment.durationMinutes} phút (Có đếm ngược)`
-                                : 'Không giới hạn'}
-                            </strong>
-                          </span>
-                          <span>•</span>
-                          <span>
-                            🔁 Số lần làm bài:{' '}
-                            <strong className="text-primary-300">
-                              {currentAssignment.maxAttempts
-                                ? `${currentAssignment.maxAttempts} lần`
-                                : 'Không giới hạn'}
-                            </strong>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => openConfigModal(currentAssignment)}
-                      className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 border-primary-500/40 text-primary-300 hover:bg-primary-500/10"
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                      Chỉnh sửa quy định
-                    </button>
-                  </div>
-                )}
-
                 {/* 3. BÀI NỘP GỐC CỦA HỌC SINH */}
                 <div className="space-y-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-text-dim flex items-center gap-1.5">
@@ -1114,12 +1094,14 @@ export default function GradingPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                       {/* Điểm mạnh */}
                       <div className="p-3.5 rounded-xl bg-accent-500/10 border border-accent-500/20 space-y-1">
-                        <span className="font-semibold text-accent-400 block">🌟 Điểm mạnh</span>
+                        <span className="font-semibold text-accent-400 block">
+                          {selectedSubmission.aiEvaluation.strengths ? '🌟 Điểm mạnh' : '📝 Điểm mạnh'}
+                        </span>
                         <p className="text-text-muted text-[11px] leading-relaxed">
                           {selectedSubmission.aiEvaluation.strengths || (
-                            selectedSubmission.aiEvaluation.score === 0
-                              ? 'Chưa có minh chứng bài làm để ghi nhận.'
-                              : 'Học sinh hoàn thành bài làm đúng tiến độ.'
+                            Number(selectedSubmission.aiEvaluation.score ?? 0) === 0
+                              ? 'Không có (bài làm chưa đạt yêu cầu để ghi nhận điểm mạnh).'
+                              : 'Không ghi nhận thêm điểm mạnh đặc biệt.'
                           )}
                         </p>
                       </div>
@@ -1129,8 +1111,8 @@ export default function GradingPage() {
                         <span className="font-semibold text-warning-400 block">🔍 Cần cải thiện</span>
                         <p className="text-text-muted text-[11px] leading-relaxed">
                           {selectedSubmission.aiEvaluation.weaknesses || (
-                            selectedSubmission.aiEvaluation.score === 0
-                              ? 'Học sinh chưa hoàn thành bài tập hoặc hết giờ làm bài.'
+                            Number(selectedSubmission.aiEvaluation.score ?? 0) >= 9
+                              ? 'Không có lỗi sai (bài làm hoàn thành xuất sắc).'
                               : 'Không có lỗi sai nghiêm trọng.'
                           )}
                         </p>
@@ -1141,8 +1123,8 @@ export default function GradingPage() {
                         <span className="font-semibold text-primary-400 block">💡 Lời khuyên sư phạm</span>
                         <p className="text-text-muted text-[11px] leading-relaxed">
                           {selectedSubmission.aiEvaluation.suggestions || (
-                            selectedSubmission.aiEvaluation.score === 0
-                              ? 'Em cần chú ý theo dõi thời gian và nộp bài đầy đủ theo hướng dẫn của Thầy/Cô.'
+                            Number(selectedSubmission.aiEvaluation.score ?? 0) === 0
+                              ? 'Em cần xem lại lý thuyết, chú ý làm cẩn thận và nộp lại bài tập nhé.'
                               : 'Tiếp tục rèn luyện và phát huy.'
                           )}
                         </p>
@@ -1234,7 +1216,7 @@ export default function GradingPage() {
                       <h3 className="text-sm font-bold text-text-primary flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-purple-400" />
                         <GraduationCap className="w-4 h-4 text-primary-400" />
-                        Quy trình Đánh giá: AI đề xuất trước ➔ Giáo viên Review & Chốt
+                        Quy trình Đánh giá: AI đề xuất
                       </h3>
                       <p className="text-[11px] text-text-muted mt-0.5">
                         AI sẽ phân tích bài làm và đưa ra lời nhận xét trước. Thầy/Cô kiểm tra lại, điều chỉnh (nếu cần) trước khi công bố cho học sinh.

@@ -31,7 +31,7 @@ export default function LoginPage() {
         return
       }
 
-      router.push(data.redirectTo || '/dashboard')
+      window.location.href = data.redirectTo || '/dashboard'
     } catch {
       setError('Có lỗi xảy ra. Vui lòng thử lại sau.')
     } finally {

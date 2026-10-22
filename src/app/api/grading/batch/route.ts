@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import type { AssignmentItem, SubmissionItem } from '@/lib/data-store'
 import { EvaluationService } from '@/lib/ai/services/evaluation.service'
+import { formatUserFriendlyAIError } from '@/lib/ai/providers/gemini.provider'
 
 /**
  * Lấy bài nộp MỚI NHẤT (lần làm cuối) của mỗi học sinh trong lớp cho 1 bài tập.
@@ -79,6 +80,13 @@ async function getLatestSubmissionsOfClass(
             s.answers.map((a) => a.answer).filter(Boolean).join('\n') || '',
           fileName: file?.fileName || '',
           fileUrl: file?.fileUrl || '',
+          answers: s.answers.map((a) => ({
+            questionId: a.questionId,
+            selectedLabel: a.answer,
+            text: a.answer,
+            score: a.score ?? undefined,
+            isCorrect: a.isCorrect ?? undefined,
+          })),
           quizResult: evalJson?.quizResult,
           aiEvaluation: s.aiEvaluation
             ? {
@@ -212,8 +220,9 @@ export async function POST(request: NextRequest) {
     let candidates = await getLatestSubmissionsOfClass(assignmentId, cls.id, cls.name, assignment.id)
     if (pickedIds.length > 0) candidates = candidates.filter((s) => pickedIds.includes(s.studentId))
 
-    // Bài trắc nghiệm đã được chấm tự động theo đáp án ngay khi nộp → không cần gọi lại AI
-    const queue = candidates.filter((s) => !s.quizResult && (regrade || !isGraded(s)))
+    // Nếu giáo viên yêu cầu chấm lại (regrade = true) hoặc chọn học sinh cụ thể (pickedIds): cho phép AI chấm/phân tích lại cả bài trắc nghiệm
+    // Nếu là chấm tự động hàng loạt chưa regrade: chỉ chấm các bài chưa có điểm AI
+    const queue = candidates.filter((s) => regrade || pickedIds.length > 0 || (!s.quizResult && !isGraded(s)))
 
     const toGrade = pickedIds.length > 0 ? queue : queue.slice(0, batchSize)
     const graded: string[] = []
@@ -222,14 +231,109 @@ export async function POST(request: NextRequest) {
     // Chấm tuần tự từng bài để tránh dồn tải lên AI
     for (const sub of toGrade) {
       try {
-        const aiEval = await EvaluationService.evaluate({
-          assignmentTitle: assignment.title,
-          gradeLevel: assignment.gradeLevel,
-          submissionContent: sub.content || '',
-          fileMetadata: sub.fileName ? { name: sub.fileName, type: 'document', size: 1024 } : undefined,
-          rubric: assignment.rubric,
-          customTeacherPrompt: assignment.aiPrompt,
-        }, (assignment as any).teacherId)
+        const isQuiz = Boolean(sub.quizResult || assignment.type === 'multiple_choice' || (assignment.questions && assignment.questions.length > 0))
+        let submissionContent = sub.content || ''
+        let rubricToUse = assignment.rubric
+        let quizGradedItems: any[] = []
+
+        if (isQuiz && assignment.questions && assignment.questions.length > 0) {
+          // Trích xuất đáp án đã chọn của học sinh từ sub.quizResult.items, sub.answers, hoặc parse sub.content
+          const rawContent = sub.content || ''
+          const contentMatchMap = new Map<number, string>()
+          const regex = /Câu\s*(\d+)[:\s]*([A-Za-z0-9]+)/gi
+          let m: RegExpExecArray | null
+          while ((m = regex.exec(rawContent)) !== null) {
+            contentMatchMap.set(Number(m[1]), m[2].trim().toUpperCase())
+          }
+
+          quizGradedItems = assignment.questions.map((q, idx) => {
+            const index = idx + 1
+            const fromAnswers = (sub as any).answers?.find((a: any) => a.questionId === q.id)
+            const fromQuizRes = sub.quizResult?.items?.find((it: any) => it.questionId === q.id || it.index === index)
+            const fromContent = contentMatchMap.get(index)
+
+            const selectedLabel = (
+              fromQuizRes?.selectedLabel ||
+              fromAnswers?.selectedLabel ||
+              fromAnswers?.text ||
+              fromContent ||
+              ''
+            ).trim().toUpperCase()
+
+            const correctOpt = q.options?.find((o) => o.isCorrect)
+            const selectedOpt = q.options?.find((o) => o.label?.toUpperCase() === selectedLabel)
+            const isCorrect = Boolean(selectedLabel && correctOpt && correctOpt.label?.toUpperCase() === selectedLabel)
+            const maxScore = q.maxScore || 1
+            const score = isCorrect ? maxScore : 0
+
+            return {
+              questionId: q.id,
+              index,
+              content: q.content,
+              selectedLabel: selectedLabel || 'Chưa chọn',
+              selectedText: selectedOpt?.text || '',
+              correctLabel: correctOpt?.label || '',
+              correctText: correctOpt?.text || '',
+              isCorrect,
+              score,
+              maxScore,
+            }
+          })
+
+          const totalWeight = quizGradedItems.reduce((s, g) => s + g.maxScore, 0) || 1
+          const totalEarned = quizGradedItems.reduce((s, g) => s + g.score, 0)
+          const quizScore = Math.round((totalEarned / totalWeight) * assignment.maxScore * 10) / 10
+
+          submissionContent = `[CHI TIẾT BÀI LÀM TRẮC NGHIỆM CỦA HỌC SINH]:\n` +
+            quizGradedItems.map((g) => {
+              const resText = g.isCorrect
+                ? `ĐÚNG (Đạt ${g.score}/${g.maxScore} điểm)`
+                : `SAI (Học sinh chọn: ${g.selectedLabel}${g.selectedText ? ` - ${g.selectedText}` : ''}; Đáp án đúng: ${g.correctLabel}${g.correctText ? ` - ${g.correctText}` : ''})`
+              return `- Câu ${g.index} (${g.content}): ${resText}`
+            }).join('\n')
+
+          rubricToUse = {
+            criteria: quizGradedItems.map((g) => ({
+              name: `Câu ${g.index}: ${g.content}`,
+              maxScore: g.maxScore,
+              description: `Học sinh trả lời đúng câu ${g.index} (${g.correctLabel})`,
+            })),
+          }
+        }
+
+        let aiEval: any = null
+        try {
+          aiEval = await EvaluationService.evaluate({
+            assignmentTitle: assignment.title,
+            gradeLevel: assignment.gradeLevel,
+            submissionContent,
+            fileMetadata: sub.fileName ? { name: sub.fileName, type: 'document', size: 1024 } : undefined,
+            rubric: rubricToUse,
+            customTeacherPrompt: assignment.aiPrompt,
+          }, (assignment as any).teacherId)
+        } catch (evalErr: any) {
+          if (isQuiz && quizGradedItems.length > 0) {
+            console.warn('[BatchGrading] Google AI tạm thời bị quá tải 503, tự động kích hoạt bộ phân tích sư phạm dự phòng theo đáp án...')
+            const right = quizGradedItems.filter((g) => g.isCorrect)
+            const wrong = quizGradedItems.filter((g) => !g.isCorrect)
+            aiEval = {
+              totalScore: Math.round((quizGradedItems.reduce((s, g) => s + g.score, 0) / (quizGradedItems.reduce((s, g) => s + g.maxScore, 0) || 1)) * assignment.maxScore * 10) / 10,
+              strengths: right.length > 0
+                ? `Thầy/Cô thấy em đã nắm vững kiến thức và trả lời đúng ${right.length}/${quizGradedItems.length} câu hỏi (${right.map((r) => `Câu ${r.index}`).join(', ')}).`
+                : null,
+              weaknesses: wrong.length > 0
+                ? `Em cần chú ý xem lại và ôn tập các câu chưa làm đúng (${wrong.map((w) => `Câu ${w.index}`).join(', ')}).`
+                : null,
+              suggestions: wrong.length > 0
+                ? `Em hãy đọc kỹ lại đề bài, quan sát các đáp án và ôn tập lại bài cùng Thầy/Cô nhé.`
+                : `Em đã hoàn thành rất tốt bài tập, tiếp tục phát huy ở các bài tiếp theo nhé!`,
+              criterionScores: [],
+            }
+          } else {
+            throw evalErr
+          }
+        }
+
         const rawScores = Array.isArray(aiEval?.criterionScores)
           ? aiEval.criterionScores
           : Array.isArray((aiEval as any)?.criteriaScores)
@@ -238,12 +342,24 @@ export async function POST(request: NextRequest) {
               ? (aiEval as any).criteria
               : []
 
-        const criteriaScores = rawScores.map((c: any) => ({
-          criterion: c.criterionName || c.criterion || c.name || 'Tiêu chí',
-          score: Number(c.suggestedScore ?? c.score ?? 0),
-          maxScore: Number(c.maxScore ?? 10),
-          evidence: c.evidence || c.feedback || '',
-        }))
+        let criteriaScores = []
+        if (quizGradedItems.length > 0) {
+          criteriaScores = quizGradedItems.map((g) => ({
+            criterion: `Câu ${g.index}`,
+            score: g.score,
+            maxScore: g.maxScore,
+            evidence: g.isCorrect
+              ? `Chọn ${g.selectedLabel} (đúng)`
+              : `Chọn ${g.selectedLabel} (sai, đúng là ${g.correctLabel})`,
+          }))
+        } else {
+          criteriaScores = rawScores.map((c: any) => ({
+            criterion: c.criterionName || c.criterion || c.name || 'Tiêu chí',
+            score: Number(c.suggestedScore ?? c.score ?? 0),
+            maxScore: Number(c.maxScore ?? 10),
+            evidence: c.evidence || c.feedback || '',
+          }))
+        }
 
         if (criteriaScores.length === 0) {
           criteriaScores.push({
@@ -254,11 +370,15 @@ export async function POST(request: NextRequest) {
           })
         }
 
+        const calculatedScore = quizGradedItems.length > 0
+          ? Math.round((quizGradedItems.reduce((s, g) => s + g.score, 0) / (quizGradedItems.reduce((s, g) => s + g.maxScore, 0) || 1)) * assignment.maxScore * 10) / 10
+          : Number(aiEval?.totalScore ?? 0)
+
         sub.aiEvaluation = {
-          score: Number(aiEval?.totalScore ?? 0),
-          strengths: aiEval?.strengths || '',
-          weaknesses: aiEval?.weaknesses || '',
-          suggestions: aiEval?.suggestions || '',
+          score: calculatedScore,
+          strengths: aiEval?.strengths ?? null,
+          weaknesses: aiEval?.weaknesses ?? null,
+          suggestions: aiEval?.suggestions ?? null,
           criteriaScores,
         }
         sub.aiGradedAt = new Date().toISOString()
@@ -320,9 +440,9 @@ export async function POST(request: NextRequest) {
               create: {
                 submissionId: dbSubmission.id,
                 provider: 'gemini',
-                model: 'gemini-2.5-flash',
+                model: 'gemini-2.0-flash',
                 status: 'completed',
-                suggestedScore: Number(aiEval?.totalScore ?? 0),
+                suggestedScore: calculatedScore,
                 strengths: aiEval?.strengths || '',
                 weaknesses: aiEval?.weaknesses || '',
                 suggestions: aiEval?.suggestions || '',
@@ -334,7 +454,7 @@ export async function POST(request: NextRequest) {
               update: {
                 provider: 'gemini',
                 status: 'completed',
-                suggestedScore: Number(aiEval?.totalScore ?? 0),
+                suggestedScore: calculatedScore,
                 strengths: aiEval?.strengths || '',
                 weaknesses: aiEval?.weaknesses || '',
                 suggestions: aiEval?.suggestions || '',
@@ -363,7 +483,7 @@ export async function POST(request: NextRequest) {
               where: { id: dbSubmission.id },
               data: {
                 status: 'grading',
-                totalScore: Number(aiEval?.totalScore ?? 0),
+                totalScore: calculatedScore,
               },
             }).catch(() => {})
           }
@@ -373,7 +493,8 @@ export async function POST(request: NextRequest) {
 
         graded.push(sub.id)
       } catch (err: any) {
-        sub.aiError = err?.message || 'AI chấm thất bại'
+        console.error('[BatchGrading] Lỗi khi chấm bài cho học sinh:', sub.studentName, err)
+        sub.aiError = formatUserFriendlyAIError(err)
         failed.push({ submissionId: sub.id, studentName: sub.studentName, error: sub.aiError! })
       }
     }

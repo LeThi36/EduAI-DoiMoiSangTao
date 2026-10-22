@@ -90,7 +90,7 @@ export default function ClassesPage() {
             Quản lý Khối & Lớp học Tin học
           </h1>
           <p className="text-xs text-text-muted mt-1">
-            Tổ chức lớp học theo năm học 2026 - 2027, phân loại khối 1 đến 5 và quản trị danh sách.
+            Tổ chức lớp học theo năm học 2026 - 2027, phân loại khối 3 đến 5 và quản trị danh sách.
           </p>
         </div>
 
@@ -107,23 +107,21 @@ export default function ClassesPage() {
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         <button
           onClick={() => setSelectedGrade('all')}
-          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
-            selectedGrade === 'all'
-              ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
-              : 'bg-surface-card border border-border-default text-text-muted hover:text-white'
-          }`}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${selectedGrade === 'all'
+            ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
+            : 'bg-surface-card border border-border-default text-text-muted hover:text-white'
+            }`}
         >
           Tất cả khối ({classes.length} lớp)
         </button>
-        {[1, 2, 3, 4, 5].map((level) => (
+        {[3, 4, 5].map((level) => (
           <button
             key={level}
             onClick={() => setSelectedGrade(level)}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
-              selectedGrade === level
-                ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
-                : 'bg-surface-card border border-border-default text-text-muted hover:text-white'
-            }`}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all ${selectedGrade === level
+              ? 'bg-primary-500 text-white shadow-md shadow-primary-500/30'
+              : 'bg-surface-card border border-border-default text-text-muted hover:text-white'
+              }`}
           >
             Khối {level}
           </button>

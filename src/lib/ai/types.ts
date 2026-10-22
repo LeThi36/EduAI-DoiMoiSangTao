@@ -9,9 +9,9 @@ export interface AICriterionResult {
 export interface AIEvaluationResult {
   totalScore: number
   maxScore: number
-  strengths: string
-  weaknesses: string
-  suggestions: string
+  strengths: string | null
+  weaknesses: string | null
+  suggestions: string | null
   criterionScores: AICriterionResult[]
   confidenceScore?: number
   flags?: string[] // e.g. "manual_review_needed", "unsupported_file"

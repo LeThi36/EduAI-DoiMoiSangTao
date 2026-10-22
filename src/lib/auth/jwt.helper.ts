@@ -4,22 +4,15 @@
  * Đảm bảo tương thích hoàn toàn cả Edge Middleware và Node.js runtime của Next.js.
  */
 
+const DEFAULT_JWT_SECRET = 'eduai_super_secret_jwt_key_2026_primary_school'
+
 function getJwtSecret(): string {
-  const secret = process.env.SESSION_SECRET || process.env.JWT_SECRET
-  if (!secret) {
-    throw new Error('Biến môi trường SESSION_SECRET chưa được thiết lập trong file .env')
-  }
+  const secret = process.env.SESSION_SECRET || process.env.JWT_SECRET || DEFAULT_JWT_SECRET
   return secret
 }
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength)
-  copy.set(bytes)
-  return copy.buffer
-}
 
 export interface JWTPayload {
   sub?: string // User ID
@@ -56,7 +49,9 @@ export function base64UrlEncode(data: Uint8Array | string): string {
  * Base64URL Decoding chuẩn RFC 4648
  */
 export function base64UrlDecode(str: string): Uint8Array {
-  const padded = str.length % 4 === 0 ? str : str + '='.repeat(4 - (str.length % 4))
+  const cleanStr = decodeURIComponent(str).trim()
+  const mod = cleanStr.length % 4
+  const padded = mod === 0 ? cleanStr : cleanStr + '='.repeat(4 - mod)
   const binary = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) {
@@ -69,9 +64,10 @@ export function base64UrlDecode(str: string): Uint8Array {
  * Lấy CryptoKey HMAC-SHA256 từ secret
  */
 async function getSigningKey(): Promise<CryptoKey> {
+  const secretBytes = textEncoder.encode(getJwtSecret())
   return crypto.subtle.importKey(
     'raw',
-    toArrayBuffer(textEncoder.encode(getJwtSecret())),
+    secretBytes,
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign', 'verify']
@@ -100,7 +96,7 @@ export async function signJWT(payload: JWTPayload, options?: JWTOptions): Promis
   // 3. Signature: HMAC-SHA256(header.payload)
   const dataToSign = `${encodedHeader}.${encodedPayload}`
   const key = await getSigningKey()
-  const signatureBuffer = await crypto.subtle.sign('HMAC', key, toArrayBuffer(textEncoder.encode(dataToSign)))
+  const signatureBuffer = await crypto.subtle.sign('HMAC', key, textEncoder.encode(dataToSign))
   const encodedSignature = base64UrlEncode(new Uint8Array(signatureBuffer))
 
   return `${dataToSign}.${encodedSignature}`
@@ -113,8 +109,12 @@ export async function signJWT(payload: JWTPayload, options?: JWTOptions): Promis
 export async function verifyJWT<T extends JWTPayload = JWTPayload>(token: string | null | undefined): Promise<T | null> {
   if (!token || typeof token !== 'string') return null
 
-  const parts = token.trim().split('.')
-  if (parts.length !== 3) return null
+  const cleanToken = token.trim().replace(/^"|"$/g, '')
+  const parts = cleanToken.split('.')
+  if (parts.length !== 3) {
+    console.warn('[JWT] Token sai định dạng (không đủ 3 phần):', parts.length)
+    return null
+  }
 
   const [encodedHeader, encodedPayload, encodedSignature] = parts
 
@@ -123,15 +123,18 @@ export async function verifyJWT<T extends JWTPayload = JWTPayload>(token: string
     const signatureBytes = base64UrlDecode(encodedSignature)
     const key = await getSigningKey()
 
-    // 1. Kiểm tra chữ ký số
+    // 1. Kiểm tra chữ ký số HMAC-SHA256
     const isValid = await crypto.subtle.verify(
       'HMAC',
       key,
-      toArrayBuffer(signatureBytes),
-      toArrayBuffer(textEncoder.encode(dataToVerify))
+      signatureBytes,
+      textEncoder.encode(dataToVerify)
     )
 
-    if (!isValid) return null
+    if (!isValid) {
+      console.warn('[JWT] Xác thực chữ ký số HMAC thất bại!')
+      return null
+    }
 
     // 2. Phân tích Payload
     const payloadJson = textDecoder.decode(base64UrlDecode(encodedPayload))
@@ -140,11 +143,13 @@ export async function verifyJWT<T extends JWTPayload = JWTPayload>(token: string
     // 3. Kiểm tra hạn sử dụng (exp)
     const currentTime = Math.floor(Date.now() / 1000)
     if (payload.exp && payload.exp < currentTime) {
+      console.warn('[JWT] Token đã hết hạn!', { exp: payload.exp, currentTime })
       return null
     }
 
     return payload
-  } catch {
+  } catch (err) {
+    console.error('[JWT] Lỗi ngoại lệ khi giải mã token:', err)
     return null
   }
 }

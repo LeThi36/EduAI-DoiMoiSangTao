@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AuthService } from '@/lib/auth/server'
+import { SESSION_COOKIE, sessionCookieOptions } from '@/lib/auth/session'
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
     const fullName = result.fullName || 'Người dùng'
     const redirectTo = roleName === 'student' ? '/student/dashboard' : '/dashboard'
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       user: {
         id: result.user.id,
         email: result.user.email,
@@ -36,6 +37,13 @@ export async function POST(request: NextRequest) {
       },
       redirectTo,
     })
+
+    // Gắn trực tiếp cookie phiên vào response header để trình duyệt chắc chắn nhận được Set-Cookie
+    if (result.token) {
+      response.cookies.set(SESSION_COOKIE, result.token, sessionCookieOptions)
+    }
+
+    return response
   } catch (error) {
     console.error('Login error:', error)
     return NextResponse.json(

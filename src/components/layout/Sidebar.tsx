@@ -5,7 +5,6 @@ import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard,
   Calendar,
-  Building2,
   GraduationCap,
   Users,
   BookOpen,
@@ -29,7 +28,6 @@ interface NavItem {
 const teacherNav: NavItem[] = [
   { name: 'Tổng quan', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Năm học', href: '/dashboard/school-years', icon: Calendar },
-  { name: 'Khối lớp', href: '/dashboard/grades', icon: Building2 },
   { name: 'Lớp học', href: '/dashboard/classes', icon: GraduationCap },
   { name: 'Học sinh', href: '/dashboard/students', icon: Users },
   { name: 'Bài tập', href: '/dashboard/assignments', icon: BookOpen },
@@ -52,13 +50,13 @@ export default function Sidebar() {
       .then(data => {
         if (data.user) setUser(data.user)
       })
-      .catch(() => {})
+      .catch(() => { })
   }, [])
 
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })
-    } catch {}
+    } catch { }
     window.location.href = '/login'
   }
 

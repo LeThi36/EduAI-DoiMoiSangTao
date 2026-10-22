@@ -32,24 +32,54 @@ export class GeminiProvider implements IAIProvider {
   async evaluateSubmission(request: EvaluationRequest): Promise<AIEvaluationResult> {
     const startTime = Date.now()
 
+    const rawCriteria =
+      request.rubric?.criteria ?? (Array.isArray(request.rubric as any) ? (request.rubric as any) : null)
+    const criteria =
+      Array.isArray(rawCriteria) && rawCriteria.length > 0
+        ? rawCriteria
+        : [{ name: 'Kỹ năng thực hành và mức độ hoàn thành', maxScore: 10, description: 'Đạt yêu cầu bài tập Tin học' }]
+
+    // 1. Kiểm tra bài nộp trống trước khi gọi AI để tiết kiệm tối đa Token
+    const content = (request.submissionContent || '').trim()
+    const hasFile = Boolean(request.fileMetadata?.name || (request as any).fileUrl)
+
+    if (content.length === 0 && !hasFile) {
+      console.log('[GeminiProvider] Phát hiện bài nộp trống (không có chữ và tệp) -> Bỏ qua gọi AI để tiết kiệm token.')
+      let maxTotal = 0
+      criteria.forEach((c: any) => { maxTotal += (Number(c.maxScore) || 10) })
+
+      return {
+        totalScore: 0,
+        maxScore: maxTotal,
+        strengths: null,
+        weaknesses: 'Học sinh nộp bài trống (không có nội dung văn bản và không có tệp đính kèm).',
+        suggestions: 'Em hãy hoàn thiện bài tập và nộp lại đầy đủ theo yêu cầu của thầy cô nhé.',
+        criterionScores: criteria.map((c: any) => ({
+          criterionName: c.name || 'Tiêu chí',
+          maxScore: Number(c.maxScore) || 10,
+          suggestedScore: 0,
+          evidence: 'Không có bài làm hoặc tệp đính kèm.',
+          feedback: `Chưa thực hiện tiêu chí "${c.name || 'tiêu chí'}".`,
+        })),
+        confidenceScore: 1.0,
+        processingTimeMs: Date.now() - startTime,
+      }
+    }
+
     if (!this.isAvailable()) {
       throw new Error(
         'Chưa cấu hình API Key Google Gemini. Vui lòng thiết lập biến môi trường GEMINI_API_KEY trong file .env để AI thực hiện chấm bài.'
       )
     }
 
-    const rawCriteria =
-      request.rubric?.criteria ?? (Array.isArray(request.rubric as any) ? (request.rubric as any) : null)
-    const fallbackCriteria =
-      Array.isArray(rawCriteria) && rawCriteria.length > 0
-        ? rawCriteria
-        : [{ name: 'Kỹ năng thực hành và mức độ hoàn thành', maxScore: 10, description: 'Đạt yêu cầu bài tập Tin học' }]
+    const fallbackCriteria = criteria
 
     const candidateModels = [
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
       AI_CONFIG.gemini.model,
       'gemini-2.5-flash',
       'gemini-flash-latest',
-      'gemini-3.5-flash',
     ].filter((m, i, arr) => m && arr.indexOf(m) === i)
 
     let lastError: any = null
@@ -82,11 +112,7 @@ export class GeminiProvider implements IAIProvider {
 
         if (!response.ok) {
           const errBody = await response.text()
-          if (response.status === 404 && model !== candidateModels[candidateModels.length - 1]) {
-            console.warn(`[GeminiProvider] Model ${model} trả về 404, thử model tiếp theo...`)
-            lastError = new Error(`Gemini API error 404 on ${model}: ${errBody}`)
-            continue
-          }
+          lastError = new Error(`Lỗi kết nối Gemini API (${response.status} trên model ${model}): ${errBody}`)
 
           if (
             response.status === 402 ||
@@ -94,12 +120,17 @@ export class GeminiProvider implements IAIProvider {
             errBody.includes('RESOURCE_EXHAUSTED')
           ) {
             throw new Error(
-              'Lỗi Gemini 402: Tài khoản Google Cloud / AI Studio của API Key này đã hết hạn mức tín dụng trả trước. ' +
+              'Lỗi Gemini 402: Tài khoản Google Cloud / AI Studio của API Key này đã hết hạn mức tín dụng. ' +
               'Vui lòng vào https://aistudio.google.com/app/apikey để tạo API Key từ một Google Cloud Project miễn phí hoặc nạp thêm số dư.'
             )
           }
 
-          throw new Error(`Lỗi kết nối Gemini API (${response.status}): ${errBody}`)
+          if (model !== candidateModels[candidateModels.length - 1]) {
+            console.warn(`[GeminiProvider] Model ${model} gặp lỗi (${response.status}), đang tự động thử model tiếp theo...`)
+            continue
+          }
+
+          throw lastError
         }
 
         const data = await response.json()
@@ -138,6 +169,9 @@ export class GeminiProvider implements IAIProvider {
 
           return {
             ...parsed,
+            strengths: parsed.strengths ?? null,
+            weaknesses: parsed.weaknesses ?? null,
+            suggestions: parsed.suggestions ?? null,
             criterionScores: normalizedCriterionScores,
             confidenceScore: 0.95,
             processingTimeMs: Date.now() - startTime,
@@ -147,15 +181,15 @@ export class GeminiProvider implements IAIProvider {
         }
       } catch (err: any) {
         lastError = err
-        if (err?.message?.includes('404') && model !== candidateModels[candidateModels.length - 1]) {
+        if (model !== candidateModels[candidateModels.length - 1]) {
+          console.warn(`[GeminiProvider] Model ${model} gặp sự cố, tự động thử model tiếp theo...`)
           continue
         }
-        throw err
       }
     }
 
     if (lastError) {
-      throw lastError
+      throw new Error(formatUserFriendlyAIError(lastError))
     }
 
     // If no API key configured, use content-aware rubric evaluation engine
@@ -268,4 +302,40 @@ function evaluateContentRuleEngine(request: EvaluationRequest, startTime: number
     criterionScores,
     processingTimeMs: Date.now() - startTime,
   }
+}
+
+/**
+ * Chuyển đổi các mã lỗi kỹ thuật phức tạp thành thông báo tiếng Việt thân thiện với giáo viên
+ */
+export function formatUserFriendlyAIError(error: any): string {
+  if (!error) return 'Lỗi không xác định khi gọi AI chấm bài.'
+  const msg = typeof error === 'string' ? error : (error.message || String(error))
+
+  if (/503|high demand|overloaded|UNAVAILABLE|temporary/i.test(msg)) {
+    return 'Máy chủ AI Google đang bị quá tải tạm thời do lượng truy cập cao. Thầy/Cô vui lòng thử lại sau 1-2 phút nhé.'
+  }
+  if (/429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(msg)) {
+    return 'Đã đạt giới hạn số lượt gọi AI miễn phí trong phút này. Thầy/Cô vui lòng chờ 1 phút rồi bấm chấm lại.'
+  }
+  if (/401|403|API_KEY_INVALID|API key not valid/i.test(msg)) {
+    return 'Khóa API Google Gemini không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra lại cấu hình GEMINI_API_KEY trong file .env.'
+  }
+  if (/402|credits are depleted/i.test(msg)) {
+    return 'Tài khoản Google Cloud/AI Studio đã hết hạn mức tín dụng. Vui lòng tạo API Key mới từ Google Cloud Project miễn phí.'
+  }
+  if (/ENOTFOUND|ECONNREFUSED|fetch failed|network|socket/i.test(msg)) {
+    return 'Không thể kết nối tới máy chủ Google (lỗi mạng hoặc mất kết nối Internet). Vui lòng kiểm tra lại kết nối mạng.'
+  }
+  if (/Chưa cấu hình API Key/i.test(msg)) {
+    return msg
+  }
+
+  // Loại bỏ các đoạn JSON kỹ thuật hoặc URL nếu có
+  const cleaned = msg
+    .replace(/\{.*?\}/gs, '')
+    .replace(/https?:\/\/[^\s]+/g, '')
+    .replace(/Lỗi kết nối Gemini API \(\d+[^)]*\):/g, '')
+    .trim()
+
+  return cleaned || 'Máy chủ AI tạm thời không thể phản hồi. Thầy/Cô vui lòng thử lại sau ít phút.'
 }

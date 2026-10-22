@@ -8,6 +8,7 @@ export interface AuthUser {
 export interface AuthResult {
   user: AuthUser | null
   error: string | null
+  token?: string
 }
 
 export interface AuthSession {
