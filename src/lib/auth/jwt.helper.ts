@@ -127,7 +127,7 @@ export async function verifyJWT<T extends JWTPayload = JWTPayload>(token: string
     const isValid = await crypto.subtle.verify(
       'HMAC',
       key,
-      signatureBytes,
+      signatureBytes as unknown as BufferSource,
       textEncoder.encode(dataToVerify)
     )
 

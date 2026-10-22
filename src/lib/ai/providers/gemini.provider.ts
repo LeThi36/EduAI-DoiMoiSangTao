@@ -330,9 +330,9 @@ export function formatUserFriendlyAIError(error: any): string {
     return msg
   }
 
-  // Loại bỏ các đoạn JSON kỹ thuật hoặc URL nếu có
+  // Loại bỏ các đoạn JSON kỹ thuật hoặc URL nếu có (dùng [\s\S] thay vì cờ 's' để tương thích toàn bộ phiên bản ES)
   const cleaned = msg
-    .replace(/\{.*?\}/gs, '')
+    .replace(/\{[\s\S]*?\}/g, '')
     .replace(/https?:\/\/[^\s]+/g, '')
     .replace(/Lỗi kết nối Gemini API \(\d+[^)]*\):/g, '')
     .trim()
